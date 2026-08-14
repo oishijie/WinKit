@@ -1,0 +1,108 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>WinKit</AssemblyName>
+    <RootNamespace>WinKit</RootNamespace>
+    <Version>2.0.0</Version>
+    <Authors>WinKit Developer</Authors>
+    <Description>统一桌面助手 (TodoList &amp; Clipboard &amp; 本地 OCR 翻译)</Description>
+    <ApplicationIcon>PTD.ico</ApplicationIcon>
+
+    <!-- PaddleOCR 原生推理库仅提供 x64 版本，必须锁定 x64 进程 -->
+    <PlatformTarget>x64</PlatformTarget>
+
+    <!-- 优化发布选项 -->
+    <PublishSingleFile>false</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <DebugType>embedded</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+    <Optimize>true</Optimize>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- 本地 OCR 依赖版本，集中维护 -->
+    <PaddleOCRSharpVersion>6.2.0</PaddleOCRSharpVersion>
+    <PaddleRuntimeVersion>3.3.0.1</PaddleRuntimeVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      UseWindowsForms 会自动注入 global using System.Windows.Forms，
+      与 WPF 的 Application / MouseEventArgs / KeyEventArgs 等大量同名类型冲突。
+      本项目所有 WinForms 用法均已显式限定（SWF.NotifyIcon / System.Windows.Forms.Screen），
+      因此直接移除这条隐式全局引用。
+    -->
+    <Using Remove="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Drawing.Common" Version="8.0.7" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="8.0.0" />
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+
+    <!--
+      本地 OCR：PaddleOCRSharp 提供托管封装，Paddle.Runtime.win_x64 提供原生推理运行时。
+      两个包自带的 build 资产会把 ~390MB 的 DLL 与模型平铺到输出根目录，
+      这里用 ExcludeAssets="build" 屏蔽，改为下方自定义规则统一收纳到 libs\ 子目录。
+    -->
+    <PackageReference Include="PaddleOCRSharp" Version="$(PaddleOCRSharpVersion)" ExcludeAssets="build" />
+    <PackageReference Include="Paddle.Runtime.win_x64" Version="$(PaddleRuntimeVersion)" ExcludeAssets="build" />
+  </ItemGroup>
+
+  <!-- ══ 本地 OCR 运行时布局 ═══════════════════════════════════════════
+       输出目录结构（对齐 SnapFind 便携版的做法）：
+         WinKit.exe
+         libs\                 原生推理库 (PaddleOCR.dll / paddle_inference.dll / opencv ...)
+         libs\inference\       PP-OCR 模型与字典
+       运行期由 PaddleOcrProvider 把 EngineBase.PaddleOCRdllPath 指向 libs\。
+  -->
+  <ItemGroup Condition="'$(NuGetPackageRoot)' != ''">
+    <!-- 原生推理运行时 -->
+    <None Include="$(NuGetPackageRoot)paddle.runtime.win_x64\$(PaddleRuntimeVersion)\build\win_x64\*.*"
+          Link="libs\%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+
+    <!-- PaddleOCR.dll（PaddleOCRSharp 的原生底座） -->
+    <None Include="$(NuGetPackageRoot)paddleocrsharp\$(PaddleOCRSharpVersion)\build\ytLib\PaddleOCR.dll"
+          Link="libs\PaddleOCR.dll"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+
+    <!-- PP-OCR 模型与字典；表格结构化模型 (SLANet) 用不到，排除以省 8MB -->
+    <None Include="$(NuGetPackageRoot)paddleocrsharp\$(PaddleOCRSharpVersion)\build\ytLib\inference\**\*.*"
+          Exclude="$(NuGetPackageRoot)paddleocrsharp\$(PaddleOCRSharpVersion)\build\ytLib\inference\SLANet_infer\**\*.*;$(NuGetPackageRoot)paddleocrsharp\$(PaddleOCRSharpVersion)\build\ytLib\inference\table_structure_dict_ch.txt;$(NuGetPackageRoot)paddleocrsharp\$(PaddleOCRSharpVersion)\build\ytLib\inference\PaddleOCRStructure.config.json"
+          Link="libs\inference\%(RecursiveDir)%(Filename)%(Extension)"
+          CopyToOutputDirectory="PreserveNewest"
+          Visible="false" />
+  </ItemGroup>
+
+  <!-- 缺少原生运行时会导致应用启动后 OCR 完全不可用，这里在构建期直接拦截 -->
+  <Target Name="VerifyLocalOcrRuntime" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="!Exists('$(OutDir)libs\PaddleOCR.dll')"
+           Text="本地 OCR 运行时缺失：未能生成 $(OutDir)libs\PaddleOCR.dll。请先执行 dotnet restore 以还原 PaddleOCRSharp / Paddle.Runtime.win_x64。" />
+    <Error Condition="!Exists('$(OutDir)libs\paddle_inference.dll')"
+           Text="本地 OCR 运行时缺失：未能生成 $(OutDir)libs\paddle_inference.dll。请先执行 dotnet restore 以还原 Paddle.Runtime.win_x64。" />
+  </Target>
+
+  <ItemGroup>
+    <!-- 将 PTD.ico 作为嵌入资源，以便托盘读取，同时编译为应用程序图标 -->
+    <Resource Include="PTD.ico" />
+    <EmbeddedResource Include="PTD.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- 排除外部参考项目，防止其代码和 XAML 被默认编译进去 -->
+    <Compile Remove="MiniPaste\**\*" />
+    <Compile Remove="PinToD\**\*" />
+    <Page Remove="MiniPaste\**\*" />
+    <Page Remove="PinToD\**\*" />
+  </ItemGroup>
+
+</Project>
