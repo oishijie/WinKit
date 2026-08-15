@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>WinKit</AssemblyName>
     <RootNamespace>WinKit</RootNamespace>
-    <Version>2.1.0</Version>
+    <Version>2.1.2</Version>
     <Authors>WinKit Developer</Authors>
     <Description>统一桌面助手 (TodoList &amp; Clipboard &amp; 本地 OCR 翻译)</Description>
     <ApplicationIcon>PTD.ico</ApplicationIcon>
