@@ -710,13 +710,15 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                                             <TextBlock Text="翻译引擎" Style="{StaticResource RowLabel}"/>
-                                            <TextBlock Text="Google 免费免 Key；OpenAI 走你的大模型（需填密钥）" Style="{StaticResource RowHint}"/>
+                                            <TextBlock Text="默认国内大模型（DeepSeek 等）直连；百度翻译需 APP ID+密钥；Google 需代理" Style="{StaticResource RowHint}"/>
                                         </StackPanel>
                                         <ComboBox x:Name="ProviderCombo" Grid.Column="1"
                                                   Style="{StaticResource SettingsCombo}"
                                                   SelectionChanged="ProviderCombo_Changed">
-                                            <ComboBoxItem Content="Google 翻译" Tag="google"/>
-                                            <ComboBoxItem Content="OpenAI 大模型" Tag="openai"/>
+                                            <ComboBoxItem Content="国内大模型 (DeepSeek 等)" Tag="deepseek"/>
+                                            <ComboBoxItem Content="百度翻译" Tag="baidu"/>
+                                            <ComboBoxItem Content="通用 OpenAI 兼容" Tag="openai"/>
+                                            <ComboBoxItem Content="Google 翻译 (需代理)" Tag="google"/>
                                         </ComboBox>
                                     </Grid>
 
@@ -793,7 +795,7 @@
                                 </StackPanel>
                             </Border>
 
-                            <TextBlock Text="OpenAI 大模型" Style="{StaticResource GroupTitle}"/>
+                            <TextBlock Text="国内大模型 / OpenAI 兼容" Style="{StaticResource GroupTitle}"/>
                             <Border x:Name="OpenAICard" Style="{StaticResource Card}" Visibility="Collapsed">
                                 <StackPanel>
                                     <Grid Margin="0,10">
@@ -803,7 +805,7 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                                             <TextBlock Text="API Key" Style="{StaticResource RowLabel}"/>
-                                            <TextBlock Text="明文保存在本地配置，仅在 OpenAI 引擎下使用" Style="{StaticResource RowHint}"/>
+                                            <TextBlock Text="明文保存在本地配置（DPAPI 加密），仅国内大模型 / OpenAI 引擎下使用" Style="{StaticResource RowHint}"/>
                                         </StackPanel>
                                         <TextBox x:Name="OpenAIApiKeyBox" Grid.Column="1"
                                                  Style="{StaticResource FieldBox}"
@@ -819,7 +821,7 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                                             <TextBlock Text="Base URL" Style="{StaticResource RowLabel}"/>
-                                            <TextBlock Text="OpenAI 兼容接口地址，留空用默认" Style="{StaticResource RowHint}"/>
+                                            <TextBlock Text="OpenAI 兼容接口地址（如 DeepSeek / 通义 / 自建），留空用默认" Style="{StaticResource RowHint}"/>
                                         </StackPanel>
                                         <TextBox x:Name="OpenAIBaseUrlBox" Grid.Column="1"
                                                  Style="{StaticResource FieldBox}"
@@ -835,7 +837,7 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                                             <TextBlock Text="模型" Style="{StaticResource RowLabel}"/>
-                                            <TextBlock Text="如 gpt-4o-mini / gpt-4o / 自建兼容模型" Style="{StaticResource RowHint}"/>
+                                            <TextBlock Text="如 deepseek-chat / gpt-4o-mini / 自建兼容模型" Style="{StaticResource RowHint}"/>
                                         </StackPanel>
                                         <TextBox x:Name="OpenAIModelBox" Grid.Column="1"
                                                  Style="{StaticResource FieldBox}"
@@ -856,6 +858,41 @@
                                         <CheckBox x:Name="OpenAISkipCertToggle" Grid.Column="1"
                                                   Style="{StaticResource ToggleSwitch}"
                                                   Click="OpenAISkipCertToggle_Click"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="百度翻译" Style="{StaticResource GroupTitle}"/>
+                            <Border x:Name="BaiduCard" Style="{StaticResource Card}" Visibility="Collapsed">
+                                <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="APP ID" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="百度翻译开放平台「通用文本翻译」的 APP ID" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="BaiduAppIdBox" Grid.Column="1"
+                                                 Style="{StaticResource FieldBox}"
+                                                 TextChanged="BaiduAppIdBox_TextChanged"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="密钥 SecretKey" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="明文保存在本地配置（DPAPI 加密），仅百度引擎下使用" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="BaiduApiKeyBox" Grid.Column="1"
+                                                 Style="{StaticResource FieldBox}"
+                                                 TextChanged="BaiduApiKeyBox_TextChanged"/>
                                     </Grid>
                                 </StackPanel>
                             </Border>

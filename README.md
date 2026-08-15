@@ -38,9 +38,12 @@
 * **截图到剪贴板（`Alt + A`）**：框选截图后直接存入剪贴板历史，无需翻译或 OCR，快速归档。
 * **完全离线识别**：OCR 由 **PaddleOCR（CPU 推理）** 在本地完成，不联网、不上传任何图像。
 * **模型热切换**：在设置中心切换 OCR 模型后无需重启应用，引擎自动在后台重建并预热，下次快捷键即时响应。
-* **可切换翻译引擎**：
-  - **Google**（默认，免密钥、走免费 `translate.googleapis.com` 端点）；
-  - **OpenAI 兼容大模型**（在设置中填写 API Key / Base URL / 模型，可接官方、中转或本地 Ollama / vLLM）。API Key 使用 Windows DPAPI 加密存储，不明文落盘。
+* **可切换翻译引擎**（默认国内大模型，国内网络直连、无需代理）：
+  - **国内大模型（DeepSeek 等 OpenAI 兼容）**：默认引擎，预填 `https://api.deepseek.com/v1` 端点，填 Key 即用；也可改接通义、本地 Ollama / vLLM 等任意 OpenAI 兼容服务；
+  - **百度翻译**：在设置中填写 APP ID + SecretKey，国内直连、无需代理；
+  - **通用 OpenAI 兼容**：自定义 Base URL（如 `api.openai.com`）；
+  - **Google**：免费免 Key 端点（国内需代理）。
+  - API Key / SecretKey 均使用 Windows DPAPI 加密存储，不明文落盘。
 * **超大截图兜底**：超长图自动降采样（`max_side_len=960` 兜底），避免推理卡死。
 * **模型缺失自动回退**：所选 OCR 模型文件缺失时，自动回退到另一个可用模型并在状态区提示。
 

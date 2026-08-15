@@ -33,8 +33,6 @@ namespace WinKit.Clipboard.Services
         private const int BatchLoadCount = 500;
         private const int CleanupThrottle = 10; // 每 N 次插入执行一次清理
 
-        private static readonly SHA256 Sha256 = SHA256.Create();
-
         public ReadOnlyObservableCollection<ClipboardItem> Items { get; }
 
         public event NotifyCollectionChangedEventHandler? ItemsChanged;
@@ -92,6 +90,15 @@ namespace WinKit.Clipboard.Services
                 mig.ExecuteNonQuery();
             }
             catch { /* 列已存在则忽略 */ }
+
+            // 迁移：为旧数据库添加 hash 列（图片内容哈希，用于去重）
+            try
+            {
+                using var mig2 = _connection.CreateCommand();
+                mig2.CommandText = "ALTER TABLE clipboard_items ADD COLUMN hash TEXT";
+                mig2.ExecuteNonQuery();
+            }
+            catch { /* 列已存在则忽略 */ }
         }
 
         /// <summary>添加图片项：编码为 PNG 存盘，路径入库</summary>
@@ -99,20 +106,30 @@ namespace WinKit.Clipboard.Services
         {
             if (image == null || image.PixelWidth == 0) return;
 
-            // 简单去重：与最新项相同尺寸的图片不重复添加
-            if (_items.Count > 0 && _items[0].Type == ClipboardItemType.Image)
+            byte[] png;
+            try
             {
-                if (_items[0].Content == $"{image.PixelWidth}x{image.PixelHeight}_dedup")
-                    return;
+                png = EncodeImageToPng(image);
             }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ClipboardManager: 图片编码失败 - {ex.Message}");
+                return;
+            }
+
+            if (png.Length == 0) return;
+
+            // 内容级去重：本张图片的像素哈希与最新一项（图片）相同则不重复添加
+            var hash = ComputeDataHash(png);
+            if (_items.Count > 0 && _items[0].Type == ClipboardItemType.Image && _items[0].ContentHash == hash)
+                return;
 
             var fileName = $"{Guid.NewGuid()}.png";
             var filePath = System.IO.Path.Combine(AppPaths.Images, fileName);
 
-            long fileSize;
             try
             {
-                fileSize = SaveImageToDisk(image, filePath);
+                File.WriteAllBytes(filePath, png);
             }
             catch (Exception ex)
             {
@@ -120,9 +137,6 @@ namespace WinKit.Clipboard.Services
                 return;
             }
 
-            if (fileSize == 0) return;
-
-            var hash = ComputeTextHash(fileName);
             var item = new ClipboardItem
             {
                 Type = ClipboardItemType.Image,
@@ -204,8 +218,15 @@ namespace WinKit.Clipboard.Services
 
         private static string ComputeTextHash(string text)
         {
-            var bytes = Sha256.ComputeHash(Encoding.UTF8.GetBytes(text));
-            return Convert.ToBase64String(bytes);
+            var bytes = Encoding.UTF8.GetBytes(text);
+            return ComputeDataHash(bytes);
+        }
+
+        /// <summary>对原始字节计算 SHA256 内容哈希（图片去重 / 文本去重共用，线程安全：每次新建实例）</summary>
+        private static string ComputeDataHash(byte[] data)
+        {
+            using var sha = SHA256.Create();
+            return Convert.ToBase64String(sha.ComputeHash(data));
         }
 
         private void InsertItemToDb(ClipboardItem item)
@@ -215,11 +236,12 @@ namespace WinKit.Clipboard.Services
                 : (item.Content ?? string.Empty); // 文本：存文本本身
             var compressed = CompressContent(contentValue);
             var command = _connection.CreateCommand();
-            command.CommandText = "INSERT INTO clipboard_items (id, content, timestamp, type) VALUES (@id, @content, @timestamp, @type)";
+            command.CommandText = "INSERT INTO clipboard_items (id, content, timestamp, type, hash) VALUES (@id, @content, @timestamp, @type, @hash)";
             command.Parameters.AddWithValue("@id", item.Id.ToString());
             command.Parameters.AddWithValue("@content", compressed);
             command.Parameters.AddWithValue("@timestamp", item.Timestamp.ToString("O"));
             command.Parameters.AddWithValue("@type", (int)item.Type);
+            command.Parameters.AddWithValue("@hash", item.ContentHash ?? string.Empty);
             command.ExecuteNonQuery();
         }
 
@@ -272,11 +294,12 @@ namespace WinKit.Clipboard.Services
 
                 var compressed = CompressContent(newItem.Content ?? string.Empty);
                 var insertCmd = _connection.CreateCommand();
-                insertCmd.CommandText = "INSERT INTO clipboard_items (id, content, timestamp, type) VALUES (@id, @content, @timestamp, @type)";
+                insertCmd.CommandText = "INSERT INTO clipboard_items (id, content, timestamp, type, hash) VALUES (@id, @content, @timestamp, @type, @hash)";
                 insertCmd.Parameters.AddWithValue("@id", newItem.Id.ToString());
                 insertCmd.Parameters.AddWithValue("@content", compressed);
                 insertCmd.Parameters.AddWithValue("@timestamp", newItem.Timestamp.ToString("O"));
                 insertCmd.Parameters.AddWithValue("@type", (int)newItem.Type);
+                insertCmd.Parameters.AddWithValue("@hash", newItem.ContentHash ?? string.Empty);
                 insertCmd.ExecuteNonQuery();
 
                 transaction.Commit();
@@ -391,7 +414,7 @@ namespace WinKit.Clipboard.Services
             try
             {
                 var command = _connection.CreateCommand();
-                command.CommandText = $"SELECT id, content, timestamp, type FROM clipboard_items ORDER BY timestamp DESC LIMIT {InitialLoadCount}";
+                command.CommandText = $"SELECT id, content, timestamp, type, hash FROM clipboard_items ORDER BY timestamp DESC LIMIT {InitialLoadCount}";
 
                 using var reader = command.ExecuteReader();
                 var loadedList = new List<ClipboardItem>();
@@ -438,7 +461,7 @@ namespace WinKit.Clipboard.Services
                     {
                         var batchItems = new List<ClipboardItem>();
                         var command = bgConn.CreateCommand();
-                        command.CommandText = $"SELECT id, content, timestamp, type FROM clipboard_items ORDER BY timestamp DESC LIMIT {BatchLoadCount} OFFSET {offset}";
+                        command.CommandText = $"SELECT id, content, timestamp, type, hash FROM clipboard_items ORDER BY timestamp DESC LIMIT {BatchLoadCount} OFFSET {offset}";
 
                         using var reader = command.ExecuteReader();
                         while (reader.Read())
@@ -501,31 +524,25 @@ namespace WinKit.Clipboard.Services
             var timestamp = DateTime.Parse(reader.GetString(2));
             var typeOrdinal = 0;
             try { typeOrdinal = reader.GetInt32(3); } catch { /* 旧行可能无 type 列 */ }
+            var hash = string.Empty;
+            try { hash = reader.GetString(4); } catch { /* 旧行可能无 hash 列 */ }
 
-            if (typeOrdinal == (int)ClipboardItemType.Image)
-            {
-                return new ClipboardItem
-                {
-                    Id = id,
-                    Type = ClipboardItemType.Image,
-                    Content = content, // 相对路径
-                    ContentHash = ComputeTextHash(content),
-                    Timestamp = timestamp
-                };
-            }
+            // 优先使用持久化的内容哈希（图片为像素哈希、文本为内容哈希）；
+            // 旧行无 hash 时回退按内容计算（图片回退为文件名哈希，去重能力较弱但行为不变）
+            var contentHash = string.IsNullOrEmpty(hash) ? ComputeTextHash(content) : hash;
 
             return new ClipboardItem
             {
                 Id = id,
-                Type = ClipboardItemType.Text,
+                Type = (ClipboardItemType)typeOrdinal,
                 Content = content,
-                ContentHash = ComputeTextHash(content),
+                ContentHash = contentHash,
                 Timestamp = timestamp
             };
         }
 
-        /// <summary>将 BitmapSource 编码为 PNG 并保存到磁盘，超长边自动缩放到 1920px</summary>
-        private static long SaveImageToDisk(System.Windows.Media.Imaging.BitmapSource source, string filePath)
+        /// <summary>将 BitmapSource 编码为 PNG 字节（超长边自动缩放到 1920px）</summary>
+        private static byte[] EncodeImageToPng(System.Windows.Media.Imaging.BitmapSource source)
         {
             const int maxSide = 1920;
             double scale = 1.0;
@@ -548,9 +565,7 @@ namespace WinKit.Clipboard.Services
 
             using var ms = new MemoryStream();
             encoder.Save(ms);
-
-            File.WriteAllBytes(filePath, ms.ToArray());
-            return new FileInfo(filePath).Length;
+            return ms.ToArray();
         }
 
         public void Dispose()

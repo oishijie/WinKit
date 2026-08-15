@@ -13,6 +13,37 @@
         PreviewMouseDoubleClick="Window_PreviewMouseDoubleClick"
         ResizeMode="CanResize">
 
+    <Window.Resources>
+        <!-- 完成态切换按钮：未完成为空心圆，已完成显示绿色对勾 -->
+        <Style x:Key="DoneButton" TargetType="Button">
+            <Setter Property="Width" Value="16"/>
+            <Setter Property="Height" Value="16"/>
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderThickness" Value="0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Grid>
+                            <Ellipse x:Name="circle" Width="14" Height="14"
+                                     Stroke="#888888" StrokeThickness="1.5" Fill="Transparent"/>
+                            <Path x:Name="check" Data="M3,7 L6,10 L11,4"
+                                  Stroke="#4CAF50" StrokeThickness="2"
+                                  StrokeEndLineCap="Round" StrokeStartLineCap="Round"
+                                  Visibility="Collapsed"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                <Setter TargetName="circle" Property="Stroke" Value="#4CAF50"/>
+                                <Setter TargetName="check" Property="Visibility" Value="Visible"/>
+                            </DataTrigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
     <!-- 主容器：圆角边框 + 60% 不透明白色背景 -->
     <Border x:Name="RootBorder"
             Background="#CCFFFFFF"
@@ -146,23 +177,37 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
 
-                                    <!-- 左侧圆点标识，多行时顶部对齐 -->
-                                    <Ellipse Grid.Column="0"
-                                             Width="6" Height="6"
-                                             Fill="#88888888"
-                                             VerticalAlignment="Top"
-                                             Margin="0,5,8,0"/>
+                                    <!-- 左侧完成态圆点：点击切换完成/未完成 -->
+                                    <Button Grid.Column="0"
+                                            Style="{StaticResource DoneButton}"
+                                            Tag="{Binding Id}"
+                                            Click="DoneToggle_Click"
+                                            VerticalAlignment="Top"
+                                            Margin="0,4,6,0"
+                                            ToolTip="标记完成 / 未完成"/>
 
-                                    <!-- 待办文本：自动换行，无字数限制 -->
+                                    <!-- 待办文本：自动换行；完成后置灰 + 删除线 -->
                                     <TextBlock Grid.Column="1"
                                                Text="{Binding Title}"
                                                FontSize="13"
-                                               Foreground="#222"
                                                TextWrapping="Wrap"
                                                TextTrimming="CharacterEllipsis"
                                                LineHeight="18"
                                                LineStackingStrategy="BlockLineHeight"
-                                               MaxHeight="54"/>
+                                               MaxHeight="54">
+                                        <TextBlock.Style>
+                                            <Style TargetType="TextBlock">
+                                                <Setter Property="Foreground" Value="#222"/>
+                                                <Setter Property="TextDecorations" Value="None"/>
+                                                <Style.Triggers>
+                                                    <DataTrigger Binding="{Binding IsDone}" Value="True">
+                                                        <Setter Property="Foreground" Value="#999999"/>
+                                                        <Setter Property="TextDecorations" Value="Strikethrough"/>
+                                                    </DataTrigger>
+                                                </Style.Triggers>
+                                            </Style>
+                                        </TextBlock.Style>
+                                    </TextBlock>
 
                                     <!-- 编辑按钮（悬停时显示） -->
                                     <Button x:Name="EditBtn"

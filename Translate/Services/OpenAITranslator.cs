@@ -67,15 +67,15 @@ namespace WinKit.Translate.Services
             _client = CreateClient(skipCertValidation);
         }
 
-        public string Name => $"OpenAI · {_model}";
+        public string Name => _model;
 
-        public async Task<string> TranslateAsync(string text, string sourceLang, string targetLang, CancellationToken ct)
+        public async Task<(string Translation, string? DetectedLang)> TranslateAsync(string text, string sourceLang, string targetLang, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(text))
-                return string.Empty;
+                return (string.Empty, null);
 
             if (string.IsNullOrWhiteSpace(_apiKey))
-                throw new InvalidOperationException("未配置 OpenAI API Key，请在设置 → 翻译与 OCR 中填写");
+                throw new InvalidOperationException("未配置 API Key，请在设置 → 翻译与 OCR 中填写（国内大模型需填写密钥）");
 
             var targetName = LanguageName(targetLang);
             var sourcePart = string.IsNullOrEmpty(sourceLang) || sourceLang == "auto"
@@ -116,7 +116,9 @@ namespace WinKit.Translate.Services
                 }
 
                 var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                return ParseOpenAIResponse(body);
+                var translation = ParseOpenAIResponse(body);
+                // OpenAI 不返回检测到的源语言，回传传入值
+                return (translation, sourceLang == "auto" ? null : sourceLang);
             }
             catch (HttpRequestException ex)
             {

@@ -71,22 +71,32 @@ namespace WinKit.Common
         public string TranslateSourceLang { get; set; } = "auto";
 
         /// <summary>
-        /// 翻译引擎：google（默认，免费免 Key）/ openai（接入你的大模型，需填写密钥）。
-        /// ITranslator 接口已为 DeepL / Azure 等预留接入位，当前实现仅这两项。
+        /// 翻译引擎：
+        ///   deepseek — 国内大模型（DeepSeek 等 OpenAI 兼容，预填国内可达端点，需填 Key）【默认】
+        ///   baidu    — 百度翻译开放平台（APP ID + 密钥，国内直连免代理）
+        ///   openai   — 通用 OpenAI 兼容接口（自定义 Base URL，需填 Key）
+        ///   google   — Google 免费端点（国内需代理，默认不再使用）
+        /// ITranslator 接口已为 DeepL / Azure 等预留接入位。
         /// </summary>
-        public string TranslateProvider { get; set; } = "google";
+        public string TranslateProvider { get; set; } = "deepseek";
 
-        /// <summary>OpenAI 兼容接口的 API Key（仅 TranslateProvider=openai 时使用，本地通过 DPAPI 加密存储，内存中为明文）</summary>
+        /// <summary>OpenAI 兼容接口的 API Key（仅 deepseek / openai 引擎使用，本地通过 DPAPI 加密存储，内存中为明文）</summary>
         public string OpenAIApiKey { get; set; } = "";
 
-        /// <summary>OpenAI 兼容接口的 Base URL，如 https://api.openai.com/v1（留空则用默认值）</summary>
-        public string OpenAIBaseUrl { get; set; } = "https://api.openai.com/v1";
+        /// <summary>OpenAI 兼容接口的 Base URL。deepseek 默认为 https://api.deepseek.com/v1；openai 默认为 https://api.openai.com/v1；留空则用对应预设值</summary>
+        public string OpenAIBaseUrl { get; set; } = "https://api.deepseek.com/v1";
 
-        /// <summary>OpenAI 大模型名，如 gpt-4o-mini / gpt-4o（仅 TranslateProvider=openai 时使用）</summary>
-        public string OpenAIModel { get; set; } = "gpt-4o-mini";
+        /// <summary>OpenAI 大模型名，如 deepseek-chat / gpt-4o-mini / 自建兼容模型（仅 deepseek / openai 引擎使用）</summary>
+        public string OpenAIModel { get; set; } = "deepseek-chat";
 
         /// <summary>OpenAI 接口是否跳过 TLS 证书校验（用于自签/内网/反代端点；默认关闭更安全）</summary>
         public bool OpenAISkipCertValidation { get; set; } = false;
+
+        /// <summary>百度翻译 APP ID（仅 TranslateProvider=baidu 时使用，本地明文存储）</summary>
+        public string BaiduAppId { get; set; } = "";
+
+        /// <summary>百度翻译 SecretKey（仅 TranslateProvider=baidu 时使用，本地通过 DPAPI 加密存储，内存中为明文）</summary>
+        public string BaiduApiKey { get; set; } = "";
 
         // ── 本地 OCR 引擎设置 ───────────────────────────
         // 识别全程在本机完成，不依赖任何在线服务，也无需 API Key。

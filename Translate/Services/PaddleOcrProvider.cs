@@ -161,15 +161,17 @@ namespace WinKit.Translate.Services
         /// <summary>
         /// 配置变更时调用。仅当会影响引擎构造的参数真的变化时才销毁重建，
         /// 否则保持现有引擎（重建一次要数秒）。
+        /// 异步等待信号量，绝不阻塞调用线程（配置变更在 UI 线程触发，
+        /// 若此时正有识别在跑，同步 Wait 会冻结界面数秒，故此处用 WaitAsync）。
         /// </summary>
-        public void Reconfigure(OcrEngineOptions options)
+        public async Task ReconfigureAsync(OcrEngineOptions options, CancellationToken ct = default)
         {
             if (options == null || _disposed) return;
             if (options == _options) return;   // record 值相等：参数没变就什么都不做
 
             var oldModel = _effectiveModel ?? _options.Model;
 
-            _gate.Wait();
+            await _gate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 _options = options;

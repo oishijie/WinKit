@@ -17,7 +17,8 @@ namespace WinKit.Translate.Services
     ///   1. 纵向重叠度足够的文本框归为同一行；
     ///   2. 行内按横坐标从左到右排序；
     ///   3. 行内相邻片段之间，中日韩字符直接相接，其余补空格；
-    ///   4. 行与行之间用换行符连接。
+    ///   4. 行与行之间用换行符连接；
+    ///   5. 最后将段落内的硬换行合并为连续文本（修复 OCR 拆行）。
     /// </summary>
     internal static class OcrTextLayout
     {
@@ -39,12 +40,15 @@ namespace WinKit.Translate.Services
             if (fragments.Count == 0)
                 return (string.Empty, Array.Empty<string>());
 
-            var lines = GroupIntoLines(fragments)
+            var rawLines = GroupIntoLines(fragments)
                 .Select(BuildLine)
                 .Where(l => !string.IsNullOrWhiteSpace(l))
                 .ToList();
 
-            return (string.Join(Environment.NewLine, lines), lines);
+            // 段落合并：将 OCR 硬换行修复为连续段落
+            var repaired = RepairLineBreaks(rawLines);
+
+            return (string.Join(Environment.NewLine, repaired), repaired);
         }
 
         // ── 1. 归一化为带包围盒的片段 ────────────────────────────
@@ -157,5 +161,99 @@ namespace WinKit.Translate.Services
             (c >= 0x3000 && c <= 0x303F) ||   // 中日韩符号与标点
             (c >= 0xAC00 && c <= 0xD7AF) ||   // 谚文音节
             (c >= 0xFF00 && c <= 0xFFEF);     // 全角字符
+
+        // ── 4. 段落合并（修复 OCR 硬换行） ───────────────────────
+
+        /// <summary>
+        /// 将 OCR 产生的硬换行修复为连续段落。
+        ///
+        /// 规则：
+        ///   1. 空行视为真实段落分隔，予以保留；
+        ///   2. 当前行以句末标点（。！？.!?）结尾 → 视为段落结束，不合并；
+        ///   3. 下一行以首行缩进开头 → 视为新段落，不合并；
+        ///   4. 其余情况将下一行接到当前行末尾（中日韩直接连接，其余补空格）。
+        /// </summary>
+        private static List<string> RepairLineBreaks(List<string> rawLines)
+        {
+            if (rawLines.Count <= 1) return rawLines;
+
+            var paragraphs = new List<string>();
+            var sb = new StringBuilder();
+            sb.Append(rawLines[0]);
+
+            for (int i = 1; i < rawLines.Count; i++)
+            {
+                var prev = sb.ToString();
+                var curr = rawLines[i];
+
+                // 空行 → 段落分隔：flush 当前段落，保留空行
+                if (string.IsNullOrWhiteSpace(curr))
+                {
+                    paragraphs.Add(prev.TrimEnd());
+                    paragraphs.Add("");
+                    sb.Clear();
+                    continue;
+                }
+
+                // 上一行以句末标点结尾 → 段落结束
+                if (EndsWithSentenceEnd(prev))
+                {
+                    paragraphs.Add(prev.TrimEnd());
+                    sb.Clear();
+                    sb.Append(curr);
+                    continue;
+                }
+
+                // 下一行以首行缩进开头 → 新段落
+                if (StartsWithIndent(curr))
+                {
+                    paragraphs.Add(prev.TrimEnd());
+                    sb.Clear();
+                    sb.Append(curr);
+                    continue;
+                }
+
+                // 否则合并：中日韩直接连接，其余补空格
+                if (sb.Length > 0 && curr.Length > 0)
+                {
+                    char lastChar = sb[sb.Length - 1];
+                    char firstChar = curr[0];
+                    if (!IsCjk(lastChar) || !IsCjk(firstChar))
+                        sb.Append(' ');
+                }
+                sb.Append(curr);
+            }
+
+            // flush 最后一段
+            if (sb.Length > 0)
+                paragraphs.Add(sb.ToString().TrimEnd());
+
+            // 清理连续空行
+            return paragraphs
+                .Where((p, idx) => !string.IsNullOrEmpty(p) || idx > 0 && !string.IsNullOrEmpty(paragraphs[idx - 1]))
+                .ToList();
+        }
+
+        /// <summary>行尾是否为句末标点（。！？.!?）</summary>
+        private static bool EndsWithSentenceEnd(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return false;
+            char last = line[line.Length - 1];
+            return last == '。' || last == '！' || last == '？'
+                || last == '.' || last == '!' || last == '?';
+        }
+
+        /// <summary>行首是否为段落缩进（全角空格 / 2+ 半角空格 / 全角空白开头）</summary>
+        private static bool StartsWithIndent(string line)
+        {
+            if (string.IsNullOrEmpty(line)) return false;
+            // 两个全角空格（中文常见首行缩进）
+            if (line.Length >= 2 && line[0] == '\u3000' && line[1] == '\u3000')
+                return true;
+            // 2+ 个半角空格
+            if (line.Length >= 2 && line[0] == ' ' && line[1] == ' ')
+                return true;
+            return false;
+        }
     }
 }

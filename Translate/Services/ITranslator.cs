@@ -19,6 +19,8 @@ namespace WinKit.Translate.Services
         /// <param name="sourceLang">源语言 (auto 表示自动检测)</param>
         /// <param name="targetLang">目标语言</param>
         /// <param name="ct">取消令牌</param>
-        Task<string> TranslateAsync(string text, string sourceLang, string targetLang, CancellationToken ct);
+        /// <returns>译文和检测到的源语言（sourceLang=auto 时由引擎返回，否则回传传入值）</returns>
+        Task<(string Translation, string? DetectedLang)> TranslateAsync(
+            string text, string sourceLang, string targetLang, CancellationToken ct);
     }
 }

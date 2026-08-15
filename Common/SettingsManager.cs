@@ -46,7 +46,8 @@ namespace WinKit.Common
                     writer.WriteStartObject();
                     foreach (var prop in doc.RootElement.EnumerateObject())
                     {
-                        if (prop.Name == "OpenAIApiKey")
+                        // 两类 API Key（OpenAI 兼容 / 百度翻译）序列化前用 DPAPI 加密落盘
+                        if (prop.Name == "OpenAIApiKey" || prop.Name == "BaiduApiKey")
                         {
                             var plain = prop.Value.GetString() ?? "";
                             writer.WriteString(prop.Name, SecureStringHelper.Encrypt(plain));
@@ -83,7 +84,7 @@ namespace WinKit.Common
                     var settings = JsonSerializer.Deserialize<AppSettings>(json);
                     if (settings != null)
                     {
-                        // 解密 API Key
+                        // 解密 API Key（OpenAI 兼容 / 百度翻译）
                         if (!string.IsNullOrEmpty(settings.OpenAIApiKey))
                         {
                             var decrypted = SecureStringHelper.Decrypt(settings.OpenAIApiKey);
@@ -98,6 +99,23 @@ namespace WinKit.Common
                                 _ = Task.Run(() =>
                                 {
                                     try { SaveSettings(settings); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"SettingsManager: 明文迁移加密失败 - {ex.Message}"); }
+                                });
+                            }
+                        }
+
+                        if (!string.IsNullOrEmpty(settings.BaiduApiKey))
+                        {
+                            var decrypted = SecureStringHelper.Decrypt(settings.BaiduApiKey);
+                            if (decrypted != null)
+                            {
+                                settings.BaiduApiKey = decrypted;
+                            }
+                            else
+                            {
+                                System.Diagnostics.Debug.WriteLine("SettingsManager: 百度密钥为明文格式，将自动加密迁移");
+                                _ = Task.Run(() =>
+                                {
+                                    try { SaveSettings(settings); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"SettingsManager: 百度密钥明文迁移加密失败 - {ex.Message}"); }
                                 });
                             }
                         }

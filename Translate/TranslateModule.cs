@@ -40,6 +40,8 @@ namespace WinKit.Translate
         private bool _busy;
         private bool _enabled;
         private bool _disposed;
+        /// <summary>当前已注册热键的快照，供设置变更时判断"快捷键是否真变"、避免无关改动触发整组重注册</summary>
+        private HotkeySnapshot? _appliedHotkeys;
 
         public bool IsEnabled => _enabled;
 
@@ -81,13 +83,16 @@ namespace WinKit.Translate
         {
             if (_ocr is PaddleOcrProvider paddle)
             {
-                paddle.Reconfigure(OcrEngineOptions.FromSettings(settings));
-
-                // 配置变更后立即在后台预热引擎，避免首次识别时冷启动等数秒
+                // Reconfigure 内部走 WaitAsync 而非同步 Wait，绝不阻塞 UI 线程；
+                // 重置完成后在后台预热新引擎，避免首次识别时冷启动等数秒。
                 // （WarmUpAsync 内部判断 IsReady，已就绪时立即返回，开销可忽略）
                 _ = Task.Run(async () =>
                 {
-                    try { await paddle.WarmUpAsync(); }
+                    try
+                    {
+                        await paddle.ReconfigureAsync(OcrEngineOptions.FromSettings(settings)).ConfigureAwait(false);
+                        await paddle.WarmUpAsync().ConfigureAwait(false);
+                    }
                     catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"OCR 热切换预热失败: {ex.Message}"); }
                 });
             }
@@ -101,11 +106,16 @@ namespace WinKit.Translate
                 _translator = CreateTranslator(newOpts);
             }
 
-            // 快捷键变更时重新注册（先注销旧的再注册新的）
+            // 仅当快捷键字段真的变化时才重新注册整组热键，
+            // 避免无关设置改动（如 OCR 线程数、翻译引擎）引发不必要的注销/注册抖动。
             if (_enabled)
             {
-                Stop();
-                Start();
+                var newKeys = HotkeySnapshot.FromSettings(settings);
+                if (!newKeys.Equals(_appliedHotkeys))
+                {
+                    Stop();
+                    Start();
+                }
             }
         }
 
@@ -124,24 +134,50 @@ namespace WinKit.Translate
         }
 
         /// <summary>按配置创建一个翻译器实例</summary>
-        private static ITranslator CreateTranslator(TranslatorOptions o) =>
-            o.Provider == "openai"
-                ? new OpenAITranslator(o.OpenAIApiKey, o.OpenAIBaseUrl, o.OpenAIModel, o.SkipCertValidation)
-                : new GoogleTranslator();
+        private static ITranslator CreateTranslator(TranslatorOptions o) => o.Provider switch
+        {
+            "baidu" => new BaiduTranslator(o.BaiduAppId, o.BaiduApiKey),
+            "openai" or "deepseek" => new OpenAITranslator(o.OpenAIApiKey, o.OpenAIBaseUrl, o.OpenAIModel, o.SkipCertValidation),
+            _ => new GoogleTranslator(),
+        };
 
         /// <summary>
         /// 翻译器构造期参数。record 提供值相等语义：配置保存后可据此判断
         /// "翻译引擎相关配置是否真的变化"，无关改动（如 OCR 线程数）不触发重建。
         /// 注意：不含源/目标语言，因为翻译时实时读取最新设置。
         /// </summary>
-        private sealed record TranslatorOptions(string Provider, string OpenAIApiKey, string OpenAIBaseUrl, string OpenAIModel, bool SkipCertValidation)
+        private sealed record TranslatorOptions(
+            string Provider, string OpenAIApiKey, string OpenAIBaseUrl, string OpenAIModel, bool SkipCertValidation,
+            string BaiduAppId, string BaiduApiKey)
         {
             public static TranslatorOptions FromSettings(AppSettings s) => new(
-                (s.TranslateProvider ?? "google").ToLowerInvariant(),
+                (s.TranslateProvider ?? "deepseek").ToLowerInvariant(),
                 s.OpenAIApiKey ?? "",
                 s.OpenAIBaseUrl ?? "",
                 s.OpenAIModel ?? "",
-                s.OpenAISkipCertValidation);
+                s.OpenAISkipCertValidation,
+                s.BaiduAppId ?? "",
+                s.BaiduApiKey ?? "");
+        }
+
+        /// <summary>
+        /// 当前已注册的全部快捷键的不可变快照。record 提供值相等语义：
+        /// 设置变更时据此判断"快捷键是否真的变化"，只有变化才触发整组热键重注册，
+        /// 避免改 OCR 线程数、翻译引擎等无关设置时的注销/注册抖动。
+        /// </summary>
+        private sealed record HotkeySnapshot(
+            (int VK, int Modifiers) ScreenshotTranslate,
+            (int VK, int Modifiers) SelectionTranslate,
+            (int VK, int Modifiers) OcrOnly,
+            (int VK, int Modifiers) SilentOcr,
+            (int VK, int Modifiers) Screenshot)
+        {
+            public static HotkeySnapshot FromSettings(AppSettings s) => new(
+                (s.HotkeyScreenshotTranslate.VK, s.HotkeyScreenshotTranslate.Modifiers),
+                (s.HotkeySelectionTranslate.VK, s.HotkeySelectionTranslate.Modifiers),
+                (s.HotkeyOcrOnly.VK, s.HotkeyOcrOnly.Modifiers),
+                (s.HotkeySilentOcr.VK, s.HotkeySilentOcr.Modifiers),
+                (s.HotkeyScreenshot.VK, s.HotkeyScreenshot.Modifiers));
         }
 
         /// <summary>根据配置启用/停用模块热键</summary>
@@ -175,6 +211,8 @@ namespace WinKit.Translate
             _hotkey.Register((uint)hkClipScreenshot.VK, hkClipScreenshot.Modifiers, () => RunAsync(ScreenshotToClipboardAsync));
 
             _enabled = true;
+            // 记录当前已注册的热键，供设置变更时判断是否需要重注册
+            _appliedHotkeys = HotkeySnapshot.FromSettings(s);
         }
 
         public void Stop()
@@ -386,15 +424,43 @@ namespace WinKit.Translate
             var s = _settingsManager.Settings;
             try
             {
-                var target = await _translator.TranslateAsync(text, s.TranslateSourceLang, s.TranslateTargetLang, CancellationToken.None)
+                var (translation, detected) = await _translator.TranslateAsync(
+                    text, s.TranslateSourceLang, s.TranslateTargetLang, CancellationToken.None)
                     .ConfigureAwait(true);
-                return Models.TranslationResult.Ok(text, target);
+
+                // 智能跳过：检测到的源语言与目标语言相同时，跳过翻译直接返回原文
+                // （典型场景：OCR 截到英文但目标语言是 zh-CN，或截到中文但目标是 en）
+                if (detected != null && IsSameLang(detected, s.TranslateTargetLang))
+                {
+                    System.Diagnostics.Debug.WriteLine(
+                        $"翻译跳过：检测到源语言 {detected} = 目标语言 {s.TranslateTargetLang}");
+                    return Models.TranslationResult.Ok(text, text, detected);
+                }
+
+                return Models.TranslationResult.Ok(text, translation, detected);
             }
             catch (Exception ex)
             {
                 return Models.TranslationResult.Fail(text, ex.Message);
             }
         }
+
+        /// <summary>
+        /// 归一化语言代码，用于比较源/目标语言是否相同。
+        /// Google API 可能返回 "zh" 而非 "zh-CN"，需统一处理。
+        /// </summary>
+        private static string NormalizeLang(string? lang)
+        {
+            if (string.IsNullOrEmpty(lang)) return "";
+            var l = lang.ToLowerInvariant().Trim();
+            // Google 返回 "zh" 表示中文（不区分简繁），统一映射到 "zh"
+            if (l == "zh" || l == "zh-cn" || l == "zh-tw") return "zh";
+            return l;
+        }
+
+        /// <summary>检测到的源语言是否与目标语言相同（跳过翻译）</summary>
+        private static bool IsSameLang(string detected, string target)
+            => NormalizeLang(detected) == NormalizeLang(target);
 
         // ══════════════════════════════════════════════
         //  结果窗「翻译 / 搜索」按钮回调（SnapFind 式就地操作）

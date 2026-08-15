@@ -22,10 +22,11 @@ namespace WinKit.Translate.Services
 
         public string Name => "Google";
 
-        public async Task<string> TranslateAsync(string text, string sourceLang, string targetLang, CancellationToken ct)
+        public async Task<(string Translation, string? DetectedLang)> TranslateAsync(
+            string text, string sourceLang, string targetLang, CancellationToken ct)
         {
             if (string.IsNullOrWhiteSpace(text))
-                return string.Empty;
+                return (string.Empty, null);
 
             var query = Uri.EscapeDataString(text);
             var sl = string.IsNullOrEmpty(sourceLang) ? "auto" : sourceLang;
@@ -44,19 +45,19 @@ namespace WinKit.Translate.Services
 
         /// <summary>
         /// 解析 Google gtx 返回的嵌套数组 JSON：
-        /// [[["译文","原文",...],...], ..., ["检测到的源语言"]]
+        /// [[["译文","原文",...],...], ..., "检测到的源语言"]
         /// </summary>
-        private static string ParseGoogleResponse(string json)
+        private static (string Translation, string? DetectedLang) ParseGoogleResponse(string json)
         {
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
 
             if (root.ValueKind != JsonValueKind.Array)
-                return string.Empty;
+                return (string.Empty, null);
 
             var first = root[0];
             if (first.ValueKind != JsonValueKind.Array)
-                return string.Empty;
+                return (string.Empty, null);
 
             var sb = new System.Text.StringBuilder();
             foreach (var seg in first.EnumerateArray())
@@ -69,7 +70,17 @@ namespace WinKit.Translate.Services
                         sb.Append(piece);
                 }
             }
-            return sb.ToString();
+
+            // 提取检测到的源语言：位于外层数组的第三个元素 root[2]
+            string? detected = null;
+            if (root.GetArrayLength() > 2)
+            {
+                var langElement = root[2];
+                if (langElement.ValueKind == JsonValueKind.String)
+                    detected = langElement.GetString();
+            }
+
+            return (sb.ToString(), detected);
         }
     }
 }

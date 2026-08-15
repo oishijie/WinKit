@@ -146,12 +146,15 @@ namespace WinKit.Common
 
                 // ④ 翻译与 OCR
                 TranslateToggle.IsChecked = s.TranslateEnable;
-                SelectByTag(ProviderCombo, s.TranslateProvider, "google");
+                SelectByTag(ProviderCombo, s.TranslateProvider, "deepseek");
                 OpenAIApiKeyBox.Text = s.OpenAIApiKey ?? "";
                 OpenAIBaseUrlBox.Text = s.OpenAIBaseUrl ?? "";
                 OpenAIModelBox.Text = s.OpenAIModel ?? "";
                 OpenAISkipCertToggle.IsChecked = s.OpenAISkipCertValidation;
+                BaiduAppIdBox.Text = s.BaiduAppId ?? "";
+                BaiduApiKeyBox.Text = s.BaiduApiKey ?? "";
                 SyncOpenAICard(s.TranslateEnable);
+                SyncBaiduCard(s.TranslateEnable);
                 SelectByTag(TargetLangCombo, s.TranslateTargetLang, "zh-CN");
                 SelectByTag(SourceLangCombo, s.TranslateSourceLang, "auto");
                 SelectByTag(SearchEngineCombo, (s.OcrSearchEngine ?? "bing").ToLowerInvariant(), "bing");
@@ -165,6 +168,7 @@ namespace WinKit.Common
                 PreloadToggle.IsChecked = s.OcrPreloadOnStartup;
                 TranslateCard.IsEnabled = s.TranslateEnable;
                 OcrCard.IsEnabled = s.TranslateEnable;
+                BaiduCard.IsEnabled = s.TranslateEnable;
 
                 // ⑤ 关于
                 var version = Assembly.GetExecutingAssembly().GetName().Version;
@@ -594,6 +598,9 @@ namespace WinKit.Common
             TranslateCard.IsEnabled = enable;
             OcrCard.IsEnabled = enable;
             OpenAICard.IsEnabled = enable;
+            BaiduCard.IsEnabled = enable;
+            SyncOpenAICard(enable);
+            SyncBaiduCard(enable);
         }
 
         private void ProviderCombo_Changed(object sender, SelectionChangedEventArgs e)
@@ -601,9 +608,40 @@ namespace WinKit.Common
             if (_suspend) return;
             var tag = SelectedTag(ProviderCombo);
             if (tag == null) return;
-            _settingsManager.Settings.TranslateProvider = tag;
+            var s = _settingsManager.Settings;
+            s.TranslateProvider = tag;
+
+            // 切换到国内大模型 / 通用 OpenAI 时，自动填入对应预设端点与模型，
+            // 避免从 Google 切过来后仍停在 api.openai.com（国内不可达）。
+            // 仅在用户未手动填过（空）或仍是另一种预设值时覆盖，不破坏自定义地址。
+            if (tag == "deepseek")
+            {
+                if (string.IsNullOrWhiteSpace(s.OpenAIBaseUrl) || s.OpenAIBaseUrl == "https://api.openai.com/v1")
+                    s.OpenAIBaseUrl = "https://api.deepseek.com/v1";
+                if (string.IsNullOrWhiteSpace(s.OpenAIModel) || s.OpenAIModel == "gpt-4o-mini")
+                    s.OpenAIModel = "deepseek-chat";
+                OpenAIBaseUrlBox.Text = s.OpenAIBaseUrl;
+                OpenAIModelBox.Text = s.OpenAIModel;
+            }
+            else if (tag == "openai")
+            {
+                if (string.IsNullOrWhiteSpace(s.OpenAIBaseUrl) || s.OpenAIBaseUrl == "https://api.deepseek.com/v1")
+                    s.OpenAIBaseUrl = "https://api.openai.com/v1";
+                if (string.IsNullOrWhiteSpace(s.OpenAIModel) || s.OpenAIModel == "deepseek-chat")
+                    s.OpenAIModel = "gpt-4o-mini";
+                OpenAIBaseUrlBox.Text = s.OpenAIBaseUrl;
+                OpenAIModelBox.Text = s.OpenAIModel;
+            }
+            else if (tag == "baidu")
+            {
+                // 引导用户填写 APP ID
+                BaiduAppIdBox.Focus();
+            }
+
             Save();
-            SyncOpenAICard(TranslateToggle.IsChecked == true);
+            bool enabled = TranslateToggle.IsChecked == true;
+            SyncOpenAICard(enabled);
+            SyncBaiduCard(enabled);
         }
 
         private void OpenAIApiKeyBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -634,12 +672,34 @@ namespace WinKit.Common
             Save();
         }
 
-        /// <summary>引擎为 OpenAI 时显示配置卡片；同时受「翻译模块开关」约束</summary>
+        private void BaiduAppIdBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.BaiduAppId = BaiduAppIdBox.Text ?? "";
+            Save();
+        }
+
+        private void BaiduApiKeyBox_TextChanged(object sender, TextChangedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.BaiduApiKey = BaiduApiKeyBox.Text ?? "";
+            Save();
+        }
+
+        /// <summary>引擎为国内大模型 / 通用 OpenAI 时显示配置卡片；同时受「翻译模块开关」约束</summary>
         private void SyncOpenAICard(bool moduleEnabled)
         {
-            bool isOpenAI = SelectedTag(ProviderCombo) == "openai";
-            OpenAICard.Visibility = (isOpenAI && moduleEnabled) ? Visibility.Visible : Visibility.Collapsed;
+            bool isLLM = SelectedTag(ProviderCombo) is "openai" or "deepseek";
+            OpenAICard.Visibility = (isLLM && moduleEnabled) ? Visibility.Visible : Visibility.Collapsed;
             OpenAICard.IsEnabled = moduleEnabled;
+        }
+
+        /// <summary>引擎为百度翻译时显示配置卡片；同时受「翻译模块开关」约束</summary>
+        private void SyncBaiduCard(bool moduleEnabled)
+        {
+            bool isBaidu = SelectedTag(ProviderCombo) == "baidu";
+            BaiduCard.Visibility = (isBaidu && moduleEnabled) ? Visibility.Visible : Visibility.Collapsed;
+            BaiduCard.IsEnabled = moduleEnabled;
         }
 
         private void TargetLangCombo_Changed(object sender, SelectionChangedEventArgs e)

@@ -467,11 +467,29 @@ namespace WinKit.Todo
 
             if (e.OriginalSource is FrameworkElement fe && fe.DataContext is TodoItem item)
             {
+                // 双击已完成条目 → 一键删除（与 README 行为一致）
+                if (item.IsDone)
+                {
+                    _items.Remove(item);
+                    _storage.SaveTodos(_items);
+                    return;
+                }
                 ShowEditDialog(item);
                 return;
             }
 
             ShowInlineInput();
+        }
+
+        /// <summary>点击左侧圆圈切换完成/未完成状态并持久化</summary>
+        private void DoneToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if ((sender as FrameworkElement)?.DataContext is TodoItem item)
+            {
+                item.IsDone = !item.IsDone;
+                _storage.SaveTodos(_items);
+            }
+            e.Handled = true;
         }
 
         private void ShowInlineInput()
