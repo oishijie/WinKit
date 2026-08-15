@@ -339,6 +339,9 @@ namespace WinKit.Todo
         private void PassThroughTimer_Tick(object? sender, EventArgs e)
         {
             if (!_isPassThrough) return;
+            // 窗口不可见时（如截图选区期间隐藏）跳过 Win32 样式操作，
+            // 避免对隐藏/销毁中的窗口调用 SetWindowLong 导致崩溃
+            if (!IsVisible) return;
 
             POINT mousePos;
             GetCursorPos(out mousePos);

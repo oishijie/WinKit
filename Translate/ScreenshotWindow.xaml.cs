@@ -34,6 +34,8 @@ namespace WinKit.Translate
         private readonly RectangleGeometry _full = new RectangleGeometry();
         /// <summary>截底图前隐藏的应用窗口，选区完成后恢复</summary>
         private readonly System.Collections.Generic.List<Window> _hiddenWindows = new();
+        /// <summary>Complete 正在执行标志，防止 Show() 恢复 Topmost 窗口时抢焦点触发 Deactivated → Cancel() 重入崩溃</summary>
+        private bool _completing;
 
         private double _dpiScaleX = 1.0;
         private double _dpiScaleY = 1.0;
@@ -240,24 +242,30 @@ namespace WinKit.Translate
 
         private void Cancel()
         {
+            // 防止 Complete 内部 Close/Show 触发 Deactivated 事件重入
+            if (_completing) return;
             Complete(null);
         }
 
         private void Complete(SDRectangle? result)
         {
-            if (_tcs == null) return;
+            if (_tcs == null || _completing) return;
+            _completing = true;
             RootCanvas.ReleaseMouseCapture();
 
-            // 选区完成/取消，恢复所有被隐藏的应用窗口
+            // 先完成 Task 并关闭选区窗口，再恢复被隐藏的应用窗口。
+            // 顺序很重要：如果先 Show() 恢复 Topmost 窗口（如 TodoList 置顶），
+            // 它会抢走焦点，触发 ScreenshotWindow.Deactivated → Cancel() → Complete() 重入崩溃。
+            _tcs.TrySetResult(result);
+            _tcs = null;
+            Close();
+
+            // 选区窗口已关闭，安全恢复所有被隐藏的应用窗口
             foreach (var w in _hiddenWindows)
             {
                 try { w.Show(); } catch { }
             }
             _hiddenWindows.Clear();
-
-            _tcs.TrySetResult(result);
-            _tcs = null;
-            Close();
         }
     }
 }
