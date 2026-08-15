@@ -14,7 +14,7 @@
         PreviewKeyDown="ResultWindow_PreviewKeyDown">
 
     <Window.Resources>
-        <!-- 结果窗底部小按钮统一样式（复制 / 翻译 / 搜索） -->
+        <!-- 结果窗顶部小按钮统一样式（复制 / 翻译 / 搜索） -->
         <Style x:Key="ResultActionBtn" TargetType="Button">
             <Setter Property="Background" Value="Transparent"/>
             <Setter Property="BorderThickness" Value="1"/>
@@ -55,13 +55,55 @@
             BorderThickness="1">
         <Grid>
             <Grid.RowDefinitions>
+                <RowDefinition Height="26"/>
                 <RowDefinition Height="36"/>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="34"/>
             </Grid.RowDefinitions>
 
+            <!-- ═══ 顶部状态栏（原在底部，移至顶部避免被截图 OCR 误识别） ═══ -->
+            <Grid Grid.Row="0" Margin="10,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <Button x:Name="CopyBtn"
+                        Grid.Column="0"
+                        Content="复制"
+                        Width="56"
+                        Style="{StaticResource ResultActionBtn}"
+                        Cursor="Hand"
+                        Click="CopyBtn_Click"/>
+                <TextBlock x:Name="StatusText"
+                           Grid.Column="1"
+                           HorizontalAlignment="Left"
+                           VerticalAlignment="Center"
+                           Margin="8,0,0,0"
+                           FontSize="11"
+                           Foreground="#888"
+                           TextTrimming="CharacterEllipsis"/>
+                <StackPanel x:Name="ActionPanel"
+                            Grid.Column="2"
+                            Orientation="Horizontal"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Visibility="Collapsed">
+                    <Button x:Name="TranslateBtn"
+                            Content="翻译"
+                            Margin="0,0,6,0"
+                            Style="{StaticResource ResultActionBtn}"
+                            Click="TranslateBtn_Click"
+                            ToolTip="翻译识别出的文字"/>
+                    <Button x:Name="SearchBtn"
+                            Content="搜索"
+                            Style="{StaticResource ResultActionBtn}"
+                            Click="SearchBtn_Click"
+                            ToolTip="用默认浏览器搜索识别出的文字"/>
+                </StackPanel>
+            </Grid>
+
             <!-- ═══ 标题栏 ═══ -->
-            <Grid Grid.Row="0" x:Name="TitleBar"
+            <Grid Grid.Row="1" x:Name="TitleBar"
                   MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"
                   Background="Transparent">
                 <TextBlock x:Name="TitleText"
@@ -90,7 +132,7 @@
             </Grid>
 
             <!-- ═══ 内容区 ═══ -->
-            <ScrollViewer Grid.Row="1"
+            <ScrollViewer Grid.Row="2"
                           Style="{StaticResource NarrowScrollViewer}"
                           Padding="14,4,14,8"
                           Focusable="False">
@@ -138,55 +180,6 @@
                              TextChanged="TargetBox_TextChanged"/>
                 </StackPanel>
             </ScrollViewer>
-
-            <!-- ═══ 底部状态栏 ═══ -->
-            <Grid Grid.Row="2" Margin="10,0">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
-
-                <!-- 左侧：复制 -->
-                <Button x:Name="CopyBtn"
-                        Grid.Column="0"
-                        Content="复制"
-                        Width="56"
-                        Style="{StaticResource ResultActionBtn}"
-                        Cursor="Hand"
-                        Click="CopyBtn_Click">
-                </Button>
-
-                <!-- 中间：状态 -->
-                <TextBlock x:Name="StatusText"
-                           Grid.Column="1"
-                           HorizontalAlignment="Left"
-                           VerticalAlignment="Center"
-                           Margin="8,0,0,0"
-                           FontSize="11"
-                           Foreground="#888"
-                           TextTrimming="CharacterEllipsis"/>
-
-                <!-- 右侧：翻译 / 搜索（有识别结果时出现） -->
-                <StackPanel x:Name="ActionPanel"
-                            Grid.Column="2"
-                            Orientation="Horizontal"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Center"
-                            Visibility="Collapsed">
-                    <Button x:Name="TranslateBtn"
-                            Content="翻译"
-                            Margin="0,0,6,0"
-                            Style="{StaticResource ResultActionBtn}"
-                            Click="TranslateBtn_Click"
-                            ToolTip="翻译识别出的文字"/>
-                    <Button x:Name="SearchBtn"
-                            Content="搜索"
-                            Style="{StaticResource ResultActionBtn}"
-                            Click="SearchBtn_Click"
-                            ToolTip="用默认浏览器搜索识别出的文字"/>
-                </StackPanel>
-            </Grid>
         </Grid>
     </Border>
 </Window>

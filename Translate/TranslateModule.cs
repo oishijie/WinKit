@@ -313,22 +313,11 @@ namespace WinKit.Translate
         {
             // ScreenshotWindow 内部 TCS 为单一可信源（Complete 用 TrySetResult，Closed 兗底亦然），
             // 这里直接返回其 Task，无需再包一层外层 TCS。
+            // 截底图前 ScreenshotWindow 会自动隐藏所有可见的应用窗口（ResultWindow、
+            // Clipboard、TodoList 等），避免 CopyFromScreen 把应用自身 UI 截进底图。
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 var shot = new ScreenshotWindow();
-        
-                // 截底图前隐藏 ResultWindow，避免它被 CopyFromScreen 截进底图
-                // 导致 OCR 识别到应用自身的 UI 文字（状态栏、按钮等）
-                shot.PreCaptureCallback = () =>
-                {
-                    if (_resultWindow != null && _resultWindow.IsVisible)
-                    {
-                        _resultWindow.Hide();
-                        return () => _resultWindow.Show();
-                    }
-                    return null;
-                };
-        
                 return shot.SelectRegionAsync();
             });
         }

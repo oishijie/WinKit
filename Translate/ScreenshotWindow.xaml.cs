@@ -32,13 +32,8 @@ namespace WinKit.Translate
         private WPoint _start;
         private readonly RectangleGeometry _hole = new RectangleGeometry();
         private readonly RectangleGeometry _full = new RectangleGeometry();
-
-        /// <summary>
-        /// 截底图前的回调 —— 调用方在此隐藏自己的窗口，
-        /// 避免被 CopyFromScreen 截进底图导致 OCR 识别到应用自身 UI 文字。
-        /// 返回的 Action 在底图捕获完成后调用，用于恢复窗口可见性。
-        /// </summary>
-        public Func<Action?>? PreCaptureCallback { get; set; }
+        /// <summary>截底图前隐藏的应用窗口，选区完成后恢复</summary>
+        private readonly System.Collections.Generic.List<Window> _hiddenWindows = new();
 
         private double _dpiScaleX = 1.0;
         private double _dpiScaleY = 1.0;
@@ -51,8 +46,13 @@ namespace WinKit.Translate
             Opacity = 0; // 捕获底图前保持完全透明
             Loaded += OnLoaded;
             Deactivated += (s, e) => Cancel();
-            // 兜底：任何关闭路径（含 Alt+F4）都确保完成 Task，避免调用方永久挂起
-            Closed += (s, e) => { _tcs?.TrySetResult(null); };
+            // 兜底：任何关闭路径（含 Alt+F4）都确保完成 Task 并恢复被隐藏的窗口
+            Closed += (s, e) =>
+            {
+                foreach (var w in _hiddenWindows) { try { w.Show(); } catch { } }
+                _hiddenWindows.Clear();
+                _tcs?.TrySetResult(null);
+            };
         }
 
         /// <summary>
@@ -106,10 +106,23 @@ namespace WinKit.Translate
             Canvas.SetTop(HintBar, 18);
 
             // 捕获底图（此时 Opacity=0，自身不会被截入）
-            // 先执行回调让调用方隐藏其他窗口（如 ResultWindow），避免被截进底图
-            var postRestore = PreCaptureCallback?.Invoke();
+            // 隐藏所有可见的应用窗口，避免 CopyFromScreen 把应用自身 UI 截进底图
+            // （ResultWindow/Clipboard/TodoList 等浮动面板，尤其是 Topmost 窗口）
+            foreach (Window w in Application.Current.Windows)
+            {
+                if (w != null && w != this && w.IsVisible)
+                {
+                    _hiddenWindows.Add(w);
+                    w.Hide();
+                }
+            }
+
             BgImage.Source = CaptureFullScreen();
-            postRestore?.Invoke(); // 底图已捕获，立即恢复窗口
+
+            // 注意：不在这里恢复窗口！
+            // 如果立即恢复，Topmost 窗口（如 ResultWindow）会盖在 ScreenshotWindow 上面，
+            // 导致用户框选时看到应用自身的 UI 文字，被 OCR 误识别。
+            // 窗口将在 Complete()（选完/取消/关闭）时统一恢复。
 
             // 显现遮罩
             Opacity = 1;
@@ -234,6 +247,14 @@ namespace WinKit.Translate
         {
             if (_tcs == null) return;
             RootCanvas.ReleaseMouseCapture();
+
+            // 选区完成/取消，恢复所有被隐藏的应用窗口
+            foreach (var w in _hiddenWindows)
+            {
+                try { w.Show(); } catch { }
+            }
+            _hiddenWindows.Clear();
+
             _tcs.TrySetResult(result);
             _tcs = null;
             Close();
