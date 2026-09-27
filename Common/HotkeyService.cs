@@ -3,12 +3,14 @@ using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using System.Windows.Interop;
 
-namespace WinKit.Translate.Services
+namespace WinKit.Common
 {
     /// <summary>
     /// 全局热键服务 — 基于 Win32 RegisterHotKey，通过隐藏 HwndSource 接收 WM_HOTKEY。
-    /// 用于接管 Alt+S / Alt+D / Alt+Shift+S / Alt+Shift+F 四个翻译/OCR 热键。
-    /// （WinKit 原有 Win+V 仍由 Clipboard 的低级键盘钩子处理，互不干扰。）
+    ///
+    /// 通用组件：TranslateModule 用它接管 Alt+S / Alt+D / Alt+Shift+S / Alt+Shift+F，
+    /// CaptureModule 用它接管截图键 Alt+A。各模块各持一个实例，互不干扰。
+    /// （WinKit 原有 Win+V 仍由 Clipboard 的低级键盘钩子处理。）
     /// </summary>
     public class HotkeyService : IDisposable
     {
@@ -55,9 +57,16 @@ namespace WinKit.Translate.Services
         /// <summary>
         /// 注册组合热键。modifiers 使用 HotkeyConfig 约定：1=Alt, 2=Shift, 4=Ctrl, 8=Win。
         /// </summary>
-        /// <returns>是否注册成功（失败通常因热键被占用）</returns>
+        /// <returns>
+        /// 是否注册成功（失败通常因热键被占用）。
+        /// 特例：<paramref name="vk"/> == 0 表示用户在设置里把这条热键**清空**了 ——
+        /// 这时直接返回 true 且什么都不注册。返回 false 会让上层的
+        /// HotkeyRegistrationFailed 误报「热键注册失败」，把「用户主动留空」说成故障。
+        /// </returns>
         public bool Register(uint vk, int modifiers, Action action)
         {
+            if (vk == 0) return true; // 未设置（已清空）—— 无需注册，也不算失败
+
             uint mods = MOD_NOREPEAT;
             if ((modifiers & 1) != 0) mods |= MOD_ALT;
             if ((modifiers & 2) != 0) mods |= MOD_SHIFT;

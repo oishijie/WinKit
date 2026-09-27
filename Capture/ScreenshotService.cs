@@ -2,7 +2,7 @@ using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 
-namespace WinKit.Translate.Services
+namespace WinKit.Capture
 {
     /// <summary>
     /// 屏幕截图服务 — 按物理像素矩形区域捕获屏幕。

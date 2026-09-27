@@ -2,6 +2,7 @@ using System;
 using System.Drawing;
 using System.Reflection;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Interop;
@@ -31,7 +32,9 @@ namespace WinKit.Common
     }
 
     /// <summary>
-    /// 统一的系统托盘服务 — 基于 WPF ContextMenu 全自研，彻底匹配系统风格并完美支持失焦隐藏
+    /// 统一的系统托盘服务 — 基于 WPF ContextMenu 全自研，彻底匹配系统风格并完美支持失焦隐藏。
+    /// 菜单保持精简：只保留最高频入口（待办显隐、剪贴板历史、设置、退出），
+    /// 其余开关与参数统一收敛到设置中心，避免托盘菜单过长。
     /// </summary>
     public class TrayHelper : IDisposable
     {
@@ -50,35 +53,12 @@ namespace WinKit.Common
         // WPF ContextMenu 容器
         private readonly ContextMenu _contextMenu;
 
-        // TodoList 子菜单项
-        private readonly MenuItem _todoMenu;
-        private readonly MenuItem _todoShow;
-        private readonly MenuItem _todoHide;
-        private readonly MenuItem _todoPin;
-        private readonly MenuItem _todoPassThrough;
-
-        // Clipboard 子菜单项
-        private readonly MenuItem _pasteMenu;
-        private readonly MenuItem _pasteShow;
-        private readonly MenuItem _pasteClear;
-        private readonly MenuItem _pasteDedup;
-        private readonly MenuItem _pasteMonitoring; // 剪贴板开启/关闭选项
-
-        // Translate 子菜单项
-        private readonly MenuItem _translateMenu;
-        private readonly MenuItem _translateEnable;
-        private readonly MenuItem[] _hotkeyHintItems = new MenuItem[4]; // 快捷键只读提示项
-
-        // 顶级菜单项
-        private readonly MenuItem _itemAutoStart;
-        private readonly MenuItem _itemSettings; // 设置
-        private readonly MenuItem _itemAbout; // 关于（跳转设置窗「关于」分区）
-        private readonly MenuItem _itemExit;
-
-        // 不透明度子菜单
-        private readonly MenuItem _opacityMenu;
-        private static readonly int[] _opacityLevels = { 40, 60, 70, 80, 90, 100 };
-        private readonly MenuItem[] _opacityItems;
+        // ── 精简后的菜单项 ─────────────────────────────
+        private readonly MenuItem _itemCapture;    // 截图
+        private readonly MenuItem _itemTodoSwitch; // 显示 / 隐藏待办（文字随窗口状态动态切换）
+        private readonly MenuItem _itemPaste;      // 剪贴板历史
+        private readonly MenuItem _itemSettings;   // 设置
+        private readonly MenuItem _itemExit;       // 退出
 
         // 双击/单击计时器
         private readonly SWF.Timer _clickTimer;
@@ -112,121 +92,36 @@ namespace WinKit.Common
             // ── 2. 创建 WPF ContextMenu ───────────────────────
             _contextMenu = new ContextMenu();
 
-            // ── 3. 组建 TodoList 子菜单 ────────────────────────
-            _todoMenu = new MenuItem { Header = "TodoList" };
-            
-            _todoShow = new MenuItem { Header = "显示" };
-            _todoShow.Click += (s, e) => ShowTodoWindow();
-            
-            _todoHide = new MenuItem { Header = "隐藏" };
-            _todoHide.Click += (s, e) => HideTodoWindow();
+            // ── 3. 截图 ──────────────────────────────────────
+            _itemCapture = new MenuItem { Header = "截图" };
+            _itemCapture.Click += (s, e) => StartCapture();
 
-            _todoPin = new MenuItem { Header = "置顶" };
-            _todoPin.Click += (s, e) => ToggleTodoPin();
+            // ── 3.5 显示 / 隐藏待办 ──────────────────────────
+            _itemTodoSwitch = new MenuItem { Header = "显示待办" };
+            _itemTodoSwitch.Click += (s, e) => ToggleTodoWindow();
 
-            _todoPassThrough = new MenuItem { Header = "鼠标穿透" };
-            _todoPassThrough.Click += (s, e) => ToggleTodoPassThrough();
+            // ── 4. 剪贴板历史 ────────────────────────────────
+            _itemPaste = new MenuItem { Header = "剪贴板历史" };
+            _itemPaste.Click += (s, e) => ShowPasteWindow();
 
-            _todoMenu.Items.Add(_todoShow);
-            _todoMenu.Items.Add(_todoHide);
-            _todoMenu.Items.Add(_todoPin);
-            _todoMenu.Items.Add(_todoPassThrough);
-
-            // ── 4. 组建 Clipboard 子菜单 ───────────────────────
-            _pasteMenu = new MenuItem { Header = "Clipboard" };
-
-            _pasteShow = new MenuItem { Header = "显示历史" };
-            _pasteShow.Click += (s, e) => ShowPasteWindow();
-
-            _pasteClear = new MenuItem { Header = "清空历史" };
-            _pasteClear.Click += (s, e) => ClearPasteHistory();
-
-            _pasteDedup = new MenuItem { Header = "启用去重" };
-            _pasteDedup.IsCheckable = true;
-            _pasteDedup.IsChecked = _settingsManager.Settings.PasteEnableTextDeduplication;
-            _pasteDedup.Click += (s, e) => TogglePasteDedup();
-
-            _pasteMonitoring = new MenuItem { Header = "启用" };
-            _pasteMonitoring.IsCheckable = true;
-            _pasteMonitoring.IsChecked = _settingsManager.Settings.PasteEnableMonitoring;
-            _pasteMonitoring.Click += (s, e) => TogglePasteMonitoring();
-
-            _pasteMenu.Items.Add(_pasteShow);
-            _pasteMenu.Items.Add(_pasteClear);
-            _pasteMenu.Items.Add(_pasteDedup);
-            _pasteMenu.Items.Add(_pasteMonitoring);
-
-            // ── 4.5 组建 Translate 子菜单 ───────────────────
-            _translateMenu = new MenuItem { Header = "Translate" };
-
-            _translateEnable = new MenuItem { Header = "启用" };
-            _translateEnable.IsCheckable = true;
-            _translateEnable.IsChecked = _settingsManager.Settings.TranslateEnable;
-            _translateEnable.Click += (s, e) => ToggleTranslateEnable();
-
-            _translateMenu.Items.Add(_translateEnable);
-            _translateMenu.Items.Add(new Separator());
-
-            // 快捷键提示项（动态更新，用户可在设置中心自定义）
-            var descriptions = (_app as App)?.TranslateModule?.GetHotkeyDescriptions()
-                ?? new[] { "截图翻译    Alt+S", "划词翻译    Alt+D", "文字识别    Alt+Shift+S", "静默OCR     Alt+Shift+F" };
-            for (int i = 0; i < descriptions.Length; i++)
-            {
-                var item = MakeHintItem(descriptions[i]);
-                _hotkeyHintItems[i] = item;
-                _translateMenu.Items.Add(item);
-            }
-
-            // ── 5. 组建不透明度子菜单 ──────────────────────
-            _opacityMenu = new MenuItem { Header = "不透明度" };
-            _opacityItems = new MenuItem[_opacityLevels.Length];
-            for (int i = 0; i < _opacityLevels.Length; i++)
-            {
-                int level = _opacityLevels[i]; // 捕获循环变量
-                var item = new MenuItem
-                {
-                    Header       = $"{level}%",
-                    IsCheckable  = true,
-                    IsChecked    = (_settingsManager.Settings.WindowOpacity == level)
-                };
-                item.Click += (s, e) => SetOpacity(level);
-                _opacityItems[i] = item;
-                _opacityMenu.Items.Add(item);
-            }
-
-            // ── 6. 组建开机自启顶级菜单 ───────────────────────
-            _itemAutoStart = new MenuItem { Header = "开机启动" };
-            _itemAutoStart.IsCheckable = true;
-            _itemAutoStart.IsChecked = AutoStartHelper.IsAutoStartEnabled();
-            _itemAutoStart.Click += (s, e) => {
-                AutoStartHelper.SetAutoStart(_itemAutoStart.IsChecked);
-            };
-
-            // ── 7. 组建设置 & 关于顶级菜单 ─────────────────────
+            // ── 5. 设置 ──────────────────────────────────────
             _itemSettings = new MenuItem { Header = "设置" };
             _itemSettings.Click += (s, e) => _settingsWindow.ShowSection();
 
-            _itemAbout = new MenuItem { Header = "关于" };
-            _itemAbout.Click += (s, e) => _settingsWindow.ShowSection(SettingsWindow.SectionAbout);
-
-            // ── 8. 组建退出顶级菜单 ───────────────────────────
+            // ── 6. 退出 ──────────────────────────────────────
             _itemExit = new MenuItem { Header = "退出" };
             _itemExit.Click += (s, e) => ShutdownApp();
 
-            // ── 9. 上下文菜单组装 ──────────────────────────────
-            _contextMenu.Items.Add(_todoMenu);
-            _contextMenu.Items.Add(_pasteMenu);
-            _contextMenu.Items.Add(_translateMenu);
+            // ── 7. 上下文菜单组装 ──────────────────────────────
+            _contextMenu.Items.Add(_itemCapture);
+            _contextMenu.Items.Add(_itemTodoSwitch);
+            _contextMenu.Items.Add(_itemPaste);
             _contextMenu.Items.Add(new Separator());
-            _contextMenu.Items.Add(_opacityMenu);
-            _contextMenu.Items.Add(new Separator());
-            _contextMenu.Items.Add(_itemAutoStart);
             _contextMenu.Items.Add(_itemSettings);
-            _contextMenu.Items.Add(_itemAbout);
             _contextMenu.Items.Add(new Separator());
             _contextMenu.Items.Add(_itemExit);
 
-            // ── 9. 事件监听联动：失焦自动隐藏菜单 ──────────────────
+            // ── 8. 事件监听联动：失焦自动隐藏菜单 ──────────────────
             _menuHostWindow.Deactivated += (s, e) =>
             {
                 // 当隐形宿主窗口失去焦点时，主动收回菜单
@@ -240,7 +135,7 @@ namespace WinKit.Common
                 _menuHostWindow.Hide();
             };
 
-            // ── 10. 创建托盘图标 ────────────────────────────────
+            // ── 9. 创建托盘图标 ────────────────────────────────
             var asm = Assembly.GetExecutingAssembly();
             var iconStream = asm.GetManifestResourceStream("WinKit.PTD.ico");
             int smallWidth = (int)SystemParameters.SmallIconWidth;
@@ -257,7 +152,7 @@ namespace WinKit.Common
                 Visible = true
             };
 
-            // ── 11. 单击判定定时器 (处理左键单击/双击) ─────────────
+            // ── 10. 单击判定定时器 (处理左键单击/双击) ─────────────
             _clickTimer = new SWF.Timer();
             _clickTimer.Interval = 200;
             _clickTimer.Tick += (s, e) =>
@@ -306,7 +201,7 @@ namespace WinKit.Common
                         _contextMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.AbsolutePoint;
                         _contextMenu.HorizontalOffset = mousePos.X / dpi.DpiScaleX;
                         _contextMenu.VerticalOffset = mousePos.Y / dpi.DpiScaleY - 2;
-                        
+
                         _contextMenu.IsOpen = true;
                     });
                 }
@@ -325,8 +220,7 @@ namespace WinKit.Common
                 }
             };
 
-            SyncPinMenuItem();
-            SyncPassThroughMenuItem();
+            SyncMenuStates();
 
             // 初始化应用已保存的不透明度
             ApplyOpacity(_settingsManager.Settings.WindowOpacity);
@@ -339,60 +233,16 @@ namespace WinKit.Common
         private void OnSettingsChanged(object? sender, AppSettings settings)
         {
             ApplyOpacity(settings.WindowOpacity);
-            SyncHotkeyHints();
         }
 
-        /// <summary>同步 Translate 子菜单中的快捷键提示文本</summary>
-        private void SyncHotkeyHints()
-        {
-            var descriptions = (_app as App)?.TranslateModule?.GetHotkeyDescriptions();
-            if (descriptions == null) return;
-            for (int i = 0; i < _hotkeyHintItems.Length && i < descriptions.Length; i++)
-            {
-                _hotkeyHintItems[i].Header = descriptions[i];
-            }
-        }
-
+        /// <summary>同步菜单项状态：待办显隐文字、剪贴板入口可用性</summary>
         private void SyncMenuStates()
         {
-            bool todoVisible = _todoWindow.IsVisible;
-            _todoShow.Visibility = todoVisible ? Visibility.Collapsed : Visibility.Visible;
-            _todoHide.Visibility = todoVisible ? Visibility.Visible : Visibility.Collapsed;
-
-            bool clipboardEnabled = _settingsManager.Settings.PasteEnableMonitoring;
-            _pasteShow.IsEnabled = clipboardEnabled;
-            _pasteClear.IsEnabled = clipboardEnabled;
-            _pasteDedup.IsEnabled = clipboardEnabled;
-
-            _pasteDedup.IsChecked = _settingsManager.Settings.PasteEnableTextDeduplication;
-            _pasteMonitoring.IsChecked = clipboardEnabled;
-            _translateEnable.IsChecked = _settingsManager.Settings.TranslateEnable;
-            _itemAutoStart.IsChecked = AutoStartHelper.IsAutoStartEnabled();
-
-            // 同步不透明度选中状态
-            SyncOpacityMenu(_settingsManager.Settings.WindowOpacity);
-        }
-
-        public void SyncPinMenuItem()
-        {
-            _todoPin.Header = ((Todo.MainWindow)_todoWindow).IsPinned ? "取消置顶" : "置顶";
-        }
-
-        public void SyncPassThroughMenuItem()
-        {
-            _todoPassThrough.Header = ((Todo.MainWindow)_todoWindow).IsPassThrough ? "关闭鼠标穿透" : "鼠标穿透";
+            _itemTodoSwitch.Header = _todoWindow.IsVisible ? "隐藏待办" : "显示待办";
+            _itemPaste.IsEnabled = _settingsManager.Settings.PasteEnableMonitoring;
         }
 
         // ── 不透明度操作 ────────────────────────────────────────
-        private void SetOpacity(int opacity)
-        {
-            var settings = _settingsManager.Settings;
-            settings.WindowOpacity = opacity;
-            _settingsManager.SaveSettings(settings);
-            ApplyOpacity(opacity);
-            SyncOpacityMenu(opacity);
-        }
-
         private void ApplyOpacity(int opacity)
         {
             // 计算 Alpha 通道值 (0-255) 并转换为 #AARRGGBB 格式
@@ -417,45 +267,38 @@ namespace WinKit.Common
             });
         }
 
-        private void SyncOpacityMenu(int currentOpacity)
+        /// <summary>
+        /// 走截图流程。先稍等一下再截屏 —— 托盘菜单的浮层此刻还没收起，
+        /// 立刻截会把菜单本身截进底图。
+        /// </summary>
+        private async void StartCapture()
         {
-            for (int i = 0; i < _opacityLevels.Length; i++)
-            {
-                _opacityItems[i].IsChecked = (_opacityLevels[i] == currentOpacity);
-            }
+            var capture = (_app as App)?.CaptureModule;
+            if (capture == null) return;
+
+            await Task.Delay(150);
+            await capture.CaptureInteractiveAsync();
         }
 
-        private void ShowTodoWindow()
+        /// <summary>切换待办窗口的显示 / 隐藏</summary>
+        /// <summary>
+        /// 切换待办窗口显隐（内部会同步菜单文字）。
+        /// 由托盘菜单「显示待办」与待办唤出键共用 —— 两条入口指向同一个实现，行为不会跑偏。
+        /// </summary>
+        public void ToggleTodoWindow()
         {
             _todoWindow.Dispatcher.Invoke(() =>
             {
-                _todoWindow.Show();
-                _todoWindow.Activate();
-            });
-        }
-
-        private void HideTodoWindow()
-        {
-            _todoWindow.Dispatcher.Invoke(() => _todoWindow.Hide());
-        }
-
-        private void ToggleTodoPin()
-        {
-            _todoWindow.Dispatcher.Invoke(() =>
-            {
-                _todoWindow.Show();
-                _todoWindow.Activate();
-                ((Todo.MainWindow)_todoWindow).TogglePinFromTray();
-                SyncPinMenuItem();
-            });
-        }
-
-        private void ToggleTodoPassThrough()
-        {
-            _todoWindow.Dispatcher.Invoke(() =>
-            {
-                ((Todo.MainWindow)_todoWindow).TogglePassThroughFromTray();
-                SyncPassThroughMenuItem();
+                if (_todoWindow.IsVisible)
+                {
+                    _todoWindow.Hide();
+                }
+                else
+                {
+                    _todoWindow.Show();
+                    _todoWindow.Activate();
+                }
+                SyncMenuStates();
             });
         }
 
@@ -465,53 +308,6 @@ namespace WinKit.Common
             {
                 ((Clipboard.MainWindow)_pasteWindow).ShowAtMouse();
             });
-        }
-
-        private void ClearPasteHistory()
-        {
-            if (System.Windows.MessageBox.Show("确定清空全部剪贴板历史吗？此操作不可撤销。", "提示", MessageBoxButton.YesNo, MessageBoxImage.Question) == MessageBoxResult.Yes)
-            {
-                _pasteWindow.Dispatcher.Invoke(() =>
-                {
-                    _pasteWindow.Hide();
-                });
-                System.Windows.Application.Current.Dispatcher.Invoke(() =>
-                {
-                    var app = (App)System.Windows.Application.Current;
-                    app.ClipboardManager?.ClearAll();
-                });
-            }
-        }
-
-        private void TogglePasteDedup()
-        {
-            var settings = _settingsManager.Settings;
-            settings.PasteEnableTextDeduplication = _pasteDedup.IsChecked;
-            _settingsManager.SaveSettings(settings);
-        }
-
-        private void TogglePasteMonitoring()
-        {
-            var settings = _settingsManager.Settings;
-            settings.PasteEnableMonitoring = _pasteMonitoring.IsChecked;
-            _settingsManager.SaveSettings(settings);
-            ((App)System.Windows.Application.Current).ToggleClipboardFeature(_pasteMonitoring.IsChecked);
-            SyncMenuStates();
-        }
-
-        private void ToggleTranslateEnable()
-        {
-            var settings = _settingsManager.Settings;
-            settings.TranslateEnable = _translateEnable.IsChecked;
-            _settingsManager.SaveSettings(settings);
-            ((App)System.Windows.Application.Current).ToggleTranslateFeature(_translateEnable.IsChecked);
-        }
-
-        /// <summary>构建只读的快捷键提示菜单项</summary>
-        private static MenuItem MakeHintItem(string text)
-        {
-            var item = new MenuItem { Header = text, IsEnabled = false };
-            return item;
         }
 
         private void ShutdownApp()

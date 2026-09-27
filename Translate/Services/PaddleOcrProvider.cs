@@ -40,6 +40,29 @@ namespace WinKit.Translate.Services
         /// <summary>PaddleOCRdllPath 是进程级静态设置，只需设置一次</summary>
         private static int _dllPathInitialized;
 
+        /// <summary>背景极性检测用的缩略图长边（缩小过程即区域平均，成本与原图幅无关）</summary>
+        private const int PolarityThumbSize = 32;
+
+        /// <summary>
+        /// 背景平均亮度低于该值即判定为深色。
+        /// 常见深色 UI 底色（#1E1E1E / #252526 / #0D1117）亮度都在 40 以下，
+        /// 浅色底色（#FFFFFF / #F5F5F5）则在 240 以上，取 110 有充裕的安全余量。
+        /// </summary>
+        private const double DarkBackgroundLumaThreshold = 110.0;
+
+        /// <summary>
+        /// 反色矩阵：RGB 三通道取负，再由第五行常量项补 +255，alpha 原样保留。
+        /// 只读共享 —— <c>Prepare</c> 在信号量保护下串行执行，不存在并发写入。
+        /// </summary>
+        private static readonly ColorMatrix InvertColorMatrix = new(new[]
+        {
+            new[] { -1f, 0f, 0f, 0f, 0f },
+            new[] { 0f, -1f, 0f, 0f, 0f },
+            new[] { 0f, 0f, -1f, 0f, 0f },
+            new[] { 0f, 0f, 0f, 1f, 0f },
+            new[] { 1f, 1f, 1f, 0f, 1f },
+        });
+
         /// <summary>原生推理实例常驻时约占两三百 MB，闲置一段时间后主动释放并压缩工作集</summary>
         private Timer? _idleTimer;
 
@@ -169,17 +192,24 @@ namespace WinKit.Translate.Services
             if (options == null || _disposed) return;
             if (options == _options) return;   // record 值相等：参数没变就什么都不做
 
+            bool needRebuild = !options.SameEngineConfig(_options);
             var oldModel = _effectiveModel ?? _options.Model;
 
             await _gate.WaitAsync(ct).ConfigureAwait(false);
             try
             {
                 _options = options;
-                _failedModels.Clear();
-                _effectiveModel = null;
-                DisposeEngine();
-                _initError = null;
-                _ready = false;
+
+                // 只有影响原生引擎构造的参数变了才真正重建（一次要数秒）；
+                // 瘦身策略、深色自动反色这类前后处理参数就地生效，不付出重建代价。
+                if (needRebuild)
+                {
+                    _failedModels.Clear();
+                    _effectiveModel = null;
+                    DisposeEngine();
+                    _initError = null;
+                    _ready = false;
+                }
             }
             finally
             {
@@ -187,7 +217,9 @@ namespace WinKit.Translate.Services
                 ApplyIdleSlimPolicy();
             }
 
-            Debug.WriteLine($"PaddleOcrProvider: 配置已变更 ({OcrModelCatalog.DisplayName(oldModel)} → {OcrModelCatalog.DisplayName(options.Model)})，引擎已重置，等待后台预热");
+            Debug.WriteLine(needRebuild
+                ? $"PaddleOcrProvider: 引擎参数已变更 ({OcrModelCatalog.DisplayName(oldModel)} → {OcrModelCatalog.DisplayName(options.Model)})，引擎已重置，等待后台预热"
+                : "PaddleOcrProvider: 仅前后处理参数变更，引擎保持不变");
         }
 
         /// <summary>
@@ -343,20 +375,24 @@ namespace WinKit.Translate.Services
             try
             {
                 var sw = Stopwatch.StartNew();
-                prepared = Prepare(image);
+                prepared = Prepare(image, out bool inverted, out double preprocessScale);
                 var raw = engine.DetectText(prepared);
                 sw.Stop();
 
                 if (raw?.TextBlocks == null || raw.TextBlocks.Count == 0)
                     return OcrResult.Fail("未识别到文字");
 
-                // 注意：不能直接用 raw.Text —— 它把所有文本框无分隔地拼在一起
-                var (text, lines) = OcrTextLayout.Compose(raw.TextBlocks);
+                // 注意：不能直接用 raw.Text —— 它把所有文本框无分隔地拼在一起。
+                // 传入原图尺寸与预处理缩放系数，让版面层把引擎坐标换算回原图坐标系，
+                // 下游据此即可直接在截图上作画（对照高亮 / 译文叠图 / 按块复制）。
+                var layout = OcrTextLayout.Compose(
+                    raw.TextBlocks, image.Width, image.Height, preprocessScale);
 
-                if (string.IsNullOrWhiteSpace(text))
+                if (string.IsNullOrWhiteSpace(layout.Text))
                     return OcrResult.Fail("未识别到文字");
 
-                return OcrResult.Ok(text, lines, sw.ElapsedMilliseconds, raw.TextBlocks.Count);
+                return OcrResult.Ok(layout.Text, layout.Lines, sw.ElapsedMilliseconds,
+                                    layout.Blocks.Count, inverted, layout.Blocks);
             }
             catch (Exception ex)
             {
@@ -497,13 +533,19 @@ namespace WinKit.Translate.Services
         }
 
         /// <summary>
-        /// 预处理：统一为 24 位色，并对过小的选区做放大。
+        /// 预处理：统一为 24 位色，对过小的选区做放大，必要时对深色背景反色。
         /// 屏幕正文常见 12~16px 行高，远低于识别模型 48px 的训练尺度，
         /// 直接送入会明显掉字，先放大再识别性价比很高。
         /// </summary>
-        private static Bitmap Prepare(Bitmap source)
+        /// <param name="inverted">输出：本次是否因检出深色背景而反色</param>
+        /// <param name="scale">
+        /// 输出：原图 → 送入引擎的位图的缩放系数。
+        /// 引擎回传的文本框坐标位于缩放后的空间，需按此系数换算回原图
+        /// （见 <c>OcrTextLayout.Compose</c> 的坐标反映射）。
+        /// </param>
+        private Bitmap Prepare(Bitmap source, out bool inverted, out double scale)
         {
-            double scale = 1.0;
+            scale = 1.0;
             if (source.Height < SmallRegionHeightThreshold)
             {
                 scale = Math.Min(MaxUpscale, (double)PreferredSmallRegionHeight / source.Height);
@@ -523,6 +565,10 @@ namespace WinKit.Translate.Services
             int width = Math.Max(1, (int)Math.Round(source.Width * scale));
             int height = Math.Max(1, (int)Math.Round(source.Height * scale));
 
+            // PP-OCR 识别头按「白底黑字」训练，深色主题截图（浅字深底）直接送入会明显掉字，
+            // 先反色可把它拉回训练分布。检测放在缩略图上做，与被缩放与否互不干扰。
+            inverted = _options.AutoInvertDark && IsDarkBackground(source);
+
             // 即便不放大也复制一份 24bpp 位图：屏幕截图带 Alpha 通道，
             // 统一成 3 通道可避免原生侧对透明度的处理差异
             var target = new Bitmap(width, height, PixelFormat.Format24bppRgb);
@@ -532,14 +578,80 @@ namespace WinKit.Translate.Services
                 g.InterpolationMode = scale > 1.0 ? InterpolationMode.HighQualityBicubic : InterpolationMode.HighQualityBilinear;
                 g.PixelOffsetMode = PixelOffsetMode.HighQuality;
                 g.SmoothingMode = SmoothingMode.HighQuality;
-                g.Clear(Color.White);
-                g.DrawImage(source, new Rectangle(0, 0, width, height));
+                g.Clear(Color.White);   // 源图若有透明像素，落到白底上（反色与否都成立）
+
+                var dest = new Rectangle(0, 0, width, height);
+                if (inverted)
+                {
+                    using var attrs = new ImageAttributes();
+                    attrs.SetColorMatrix(InvertColorMatrix);
+                    g.DrawImage(source, dest, 0, 0, source.Width, source.Height, GraphicsUnit.Pixel, attrs);
+                }
+                else
+                {
+                    g.DrawImage(source, dest);
+                }
+
                 return target;
             }
             catch
             {
                 target.Dispose();
                 throw;
+            }
+        }
+
+        /// <summary>
+        /// 判断截图是否为深色背景。
+        ///
+        /// 整图等比缩到长边 32 的缩略图，再只取缩略图外圈求平均亮度：
+        /// 截图中央通常是内容（文字 / 图片），四周边带才真正代表背景底色。
+        /// 采样量恒定在千像素以内，耗时与原始图幅无关。
+        /// </summary>
+        private static bool IsDarkBackground(Bitmap source)
+        {
+            try
+            {
+                double s = (double)PolarityThumbSize / Math.Max(source.Width, source.Height);
+                int tw = Math.Max(1, (int)Math.Round(source.Width * s));
+                int th = Math.Max(1, (int)Math.Round(source.Height * s));
+
+                using var thumb = new Bitmap(tw, th, PixelFormat.Format24bppRgb);
+                using (var g = Graphics.FromImage(thumb))
+                {
+                    g.InterpolationMode = InterpolationMode.HighQualityBicubic;
+                    g.PixelOffsetMode = PixelOffsetMode.HighQuality;
+                    g.Clear(Color.White);
+                    g.DrawImage(source, new Rectangle(0, 0, tw, th));
+                }
+
+                int border = Math.Max(1, Math.Min(tw, th) / 8);
+                double sum = 0;
+                int count = 0;
+
+                for (int y = 0; y < th; y++)
+                {
+                    bool edgeRow = y < border || y >= th - border;
+
+                    for (int x = 0; x < tw; x++)
+                    {
+                        if (!edgeRow && x >= border && x < tw - border)
+                            continue;   // 中央内容区不参与背景判定
+
+                        var c = thumb.GetPixel(x, y);
+                        sum += 0.299 * c.R + 0.587 * c.G + 0.114 * c.B;
+                        count++;
+                    }
+                }
+
+                if (count == 0) return false;
+                return sum / count < DarkBackgroundLumaThreshold;
+            }
+            catch (Exception ex)
+            {
+                // 判定失败不应影响识别主流程，按浅色（不反色）处理
+                Debug.WriteLine($"PaddleOcrProvider: 背景极性检测失败，按浅色处理 - {ex.Message}");
+                return false;
             }
         }
 

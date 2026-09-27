@@ -16,7 +16,7 @@ using WSize = System.Windows.Size;
 using SDPixelFormat = System.Drawing.Imaging.PixelFormat;
 using InteropImaging = System.Windows.Interop.Imaging;
 
-namespace WinKit.Translate
+namespace WinKit.Capture
 {
     /// <summary>
     /// 全屏截图选区悬浮窗 — 覆盖整个虚拟屏幕，拖拽框选识别区域，ESC 取消。

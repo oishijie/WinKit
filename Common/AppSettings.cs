@@ -23,7 +23,7 @@ namespace WinKit.Common
         }
 
         /// <summary>
-        /// 格式化为可读字符串
+        /// 格式化为可读字符串，如「Alt + Shift + S」
         /// </summary>
         public static string Format(int vk, int modifiers)
         {
@@ -33,13 +33,58 @@ namespace WinKit.Common
             if ((modifiers & 1) != 0) parts.Add("Alt");
             if ((modifiers & 2) != 0) parts.Add("Shift");
 
-            var key = System.Windows.Input.KeyInterop.KeyFromVirtualKey(vk);
-            var keyStr = key.ToString();
-            if (keyStr.Length == 1 && char.IsLetter(keyStr[0]))
-                keyStr = keyStr.ToUpper();
-
-            parts.Add(keyStr);
+            parts.Add(KeyName(vk));
             return string.Join(" + ", parts);
+        }
+
+        /// <summary>
+        /// 把虚拟键码转成用户看得懂的键名。
+        ///
+        /// WPF 的 Key.ToString() 会吐出 D0 / OemPlus / Prior 这类内部名 ——
+        /// 用户录制 Ctrl+1，键帽上却显示「Ctrl + D0」，会以为录错了键。
+        /// </summary>
+        public static string KeyName(int vk)
+        {
+            var key = System.Windows.Input.KeyInterop.KeyFromVirtualKey(vk);
+
+            switch (key)
+            {
+                case System.Windows.Input.Key.None: return "未设置";
+
+                // 主键盘数字 0-9：D0–D9 → 0–9
+                case >= System.Windows.Input.Key.D0 and <= System.Windows.Input.Key.D9:
+                    return ((char)('0' + ((int)key - (int)System.Windows.Input.Key.D0))).ToString();
+
+                // 小键盘数字
+                case >= System.Windows.Input.Key.NumPad0 and <= System.Windows.Input.Key.NumPad9:
+                    return "小键盘 " + ((int)key - (int)System.Windows.Input.Key.NumPad0);
+
+                case System.Windows.Input.Key.OemPlus: return "+";
+                case System.Windows.Input.Key.OemMinus: return "-";
+                case System.Windows.Input.Key.OemComma: return ",";
+                case System.Windows.Input.Key.OemPeriod: return ".";
+                case System.Windows.Input.Key.OemQuestion: return "/";
+                case System.Windows.Input.Key.OemSemicolon: return ";";
+                case System.Windows.Input.Key.OemQuotes: return "'";
+                case System.Windows.Input.Key.OemOpenBrackets: return "[";
+                case System.Windows.Input.Key.OemCloseBrackets: return "]";
+                case System.Windows.Input.Key.OemPipe: return "\\";
+                case System.Windows.Input.Key.OemTilde: return "`";
+                case System.Windows.Input.Key.OemBackslash: return "\\";
+
+                case System.Windows.Input.Key.Space: return "空格";
+                case System.Windows.Input.Key.Return: return "回车";
+                case System.Windows.Input.Key.Back: return "退格";
+                case System.Windows.Input.Key.Capital: return "CapsLock";
+                case System.Windows.Input.Key.Prior: return "PageUp";
+                case System.Windows.Input.Key.Next: return "PageDown";
+                case System.Windows.Input.Key.PrintScreen: return "PrintScreen";
+                case System.Windows.Input.Key.Escape: return "Esc";
+            }
+
+            var name = key.ToString();
+            if (name.Length == 1 && char.IsLetter(name[0])) name = name.ToUpperInvariant();
+            return name;
         }
     }
 
@@ -73,7 +118,6 @@ namespace WinKit.Common
         /// <summary>
         /// 翻译引擎：
         ///   deepseek — 国内大模型（DeepSeek 等 OpenAI 兼容，预填国内可达端点，需填 Key）【默认】
-        ///   baidu    — 百度翻译开放平台（APP ID + 密钥，国内直连免代理）
         ///   openai   — 通用 OpenAI 兼容接口（自定义 Base URL，需填 Key）
         ///   google   — Google 免费端点（国内需代理，默认不再使用）
         /// ITranslator 接口已为 DeepL / Azure 等预留接入位。
@@ -92,12 +136,6 @@ namespace WinKit.Common
         /// <summary>OpenAI 接口是否跳过 TLS 证书校验（用于自签/内网/反代端点；默认关闭更安全）</summary>
         public bool OpenAISkipCertValidation { get; set; } = false;
 
-        /// <summary>百度翻译 APP ID（仅 TranslateProvider=baidu 时使用，本地明文存储）</summary>
-        public string BaiduAppId { get; set; } = "";
-
-        /// <summary>百度翻译 SecretKey（仅 TranslateProvider=baidu 时使用，本地通过 DPAPI 加密存储，内存中为明文）</summary>
-        public string BaiduApiKey { get; set; } = "";
-
         // ── 本地 OCR 引擎设置 ───────────────────────────
         // 识别全程在本机完成，不依赖任何在线服务，也无需 API Key。
 
@@ -111,6 +149,14 @@ namespace WinKit.Common
         /// 关闭可省一次推理；识别竖排或旋转文本时再打开。
         /// </summary>
         public bool OcrEnableAngleClassification { get; set; } = false;
+
+        /// <summary>
+        /// 深色截图自动反色（默认开启）。
+        /// PP-OCR 识别头按「白底黑字」训练，深色主题（终端 / IDE / 暗色网页）截图是浅字深底，
+        /// 直接送入会明显掉字。开启后先检测背景极性，判为深色则整图反色再识别。
+        /// 属预处理，改动不影响已加载的引擎（不触发重建）。
+        /// </summary>
+        public bool OcrAutoInvertDark { get; set; } = true;
 
         /// <summary>是否启用 MKL-DNN 加速（CPU 推理，默认开启）</summary>
         public bool OcrEnableMkldnn { get; set; } = true;
@@ -137,6 +183,13 @@ namespace WinKit.Common
         /// </summary>
         public string OcrSearchEngine { get; set; } = "bing";
 
+        /// <summary>
+        /// 识别历史保留条数（默认 100，范围 10–1000）。
+        /// 识别成功的结果会连同耗时、模型、块数一并入库，便于回溯与再次复制。
+        /// 设在「翻译与 OCR」分区里，超出上限后淘汰最旧的记录。
+        /// </summary>
+        public int OcrHistoryMaxItems { get; set; } = 100;
+
         // ── 快捷键配置 ─────────────────────────────────
 
         /// <summary>截图翻译快捷键（默认 Alt+S）</summary>
@@ -151,7 +204,36 @@ namespace WinKit.Common
         /// <summary>静默 OCR 快捷键（默认 Alt+Shift+F）</summary>
         public HotkeyConfig HotkeySilentOcr { get; set; } = new(0x46, 3);
 
-        /// <summary>截图到剪贴板历史快捷键（默认 Alt+A）</summary>
+        /// <summary>截图快捷键（默认 Alt+A）——框选后进标注编辑器</summary>
         public HotkeyConfig HotkeyScreenshot { get; set; } = new(0x41, 1);
+
+        /// <summary>
+        /// 剪贴板面板唤出键（默认 Win+V，VK 0x56 / Modifiers 8）。
+        ///
+        /// 与上面几条的本质区别：这条走**低级键盘钩子**而不是 RegisterHotKey。
+        /// 含 Win 键的组合被系统保留，RegisterHotKey 注册必然失败；
+        /// 钩子还有个附带好处 —— 能吞掉按键，从而阻止系统自带的剪贴板面板弹出。
+        /// 改成不含 Win 的组合后，Win+V 就归还给系统，本程序不再拦截。
+        /// </summary>
+        public HotkeyConfig HotkeyClipboardPanel { get; set; } = new(0x56, 8);
+
+        /// <summary>
+        /// 待办窗口唤出键（默认 Alt+T）——切换待办面板的显示 / 隐藏，与托盘菜单「显示待办」同一动作。
+        /// 走普通 RegisterHotKey：不含 Win 键，不需要那套低级键盘钩子。
+        /// </summary>
+        public HotkeyConfig HotkeyTodoPanel { get; set; } = new(0x54, 1);
+
+        // ── 截图模块行为 ───────────────────────────────
+        // 截图独立成 Capture 模块，与翻译 / OCR 的开关互不影响。
+
+        /// <summary>截图后是否自动把原图复制到系统剪贴板（默认开；编辑器内仍可再次复制标注结果）</summary>
+        public bool CaptureAutoCopy { get; set; } = true;
+
+        /// <summary>
+        /// 截图后是否打开标注编辑器（默认开）。
+        /// 关闭则只取图并复制，等同于「截图到剪贴板」；
+        /// 若此项与 <see cref="CaptureAutoCopy"/> 同时关闭，截图将毫无产出，因此代码会强制至少复制一次。
+        /// </summary>
+        public bool CaptureOpenEditor { get; set; } = true;
     }
 }

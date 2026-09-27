@@ -33,12 +33,15 @@
 
   <ItemGroup>
     <!--
-      UseWindowsForms 会自动注入 global using System.Windows.Forms，
-      与 WPF 的 Application / MouseEventArgs / KeyEventArgs 等大量同名类型冲突。
-      本项目所有 WinForms 用法均已显式限定（SWF.NotifyIcon / System.Windows.Forms.Screen），
-      因此直接移除这条隐式全局引用。
+      UseWindowsForms 会自动注入两条全局 using，二者都会与 WPF 冲突：
+        · System.Windows.Forms → Application / MouseEventArgs / KeyEventArgs / TextBox 等
+        · System.Drawing        → Color / Brush / Rectangle / Point / Image 等
+      本项目所有 WinForms 与 GDI+ 用法均已显式限定或显式 using
+      （SWF.NotifyIcon / System.Drawing.Bitmap / using System.Drawing; / 别名），
+      因此统一移除这两条隐式全局引用，避免类型二义性。
     -->
     <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
   </ItemGroup>
 
   <ItemGroup>

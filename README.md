@@ -8,7 +8,7 @@
 
 视觉体系采用磨砂半透明（毛玻璃），并自研贴合 Windows 11 Fluent 风格的系统托盘菜单与统一设置中心。
 
-> 本项目基于 [li5bo5/WinKit](https://github.com/li5bo5/WinKit/releases) 二次开发，沿用 **AGPL-3.0** 协议开源。当前维护仓库：[worldoi/WinKit](https://github.com/worldoi/WinKit)。
+> 本项目基于 [li5bo5/WinKit](https://github.com/li5bo5/WinKit/releases) 二次开发，沿用 **AGPL-3.0** 协议开源。当前维护仓库：[oishijie/WinKit](https://github.com/oishijie/WinKit)。
 
 ---
 
@@ -85,7 +85,7 @@
 
 ## 💾 下载
 
-* **本项目发布页（worldoi/WinKit）**：[GitHub Releases](https://github.com/worldoi/WinKit/releases)
+* **本项目发布页（oishijie/WinKit）**：[GitHub Releases](https://github.com/oishijie/WinKit/releases)
 * **原项目 / 上游（li5bo5/WinKit）**：[GitHub Releases](https://github.com/li5bo5/WinKit/releases)
 
 ---

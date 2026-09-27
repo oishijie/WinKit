@@ -13,8 +13,20 @@ namespace WinKit.Translate.Services
         bool EnableAngleClassification,
         bool EnableMkldnn,
         int CpuThreads,
-        int IdleSlimSeconds)
+        int IdleSlimSeconds,
+        bool AutoInvertDark)
     {
+        /// <summary>
+        /// 两个配置是否共用同一套引擎构造参数。
+        /// <see cref="IdleSlimSeconds"/>（瘦身策略）与 <see cref="AutoInvertDark"/>（预处理）
+        /// 只影响识别前后的行为，不参与原生引擎构造 —— 它们变化时无需付出数秒的重建代价。
+        /// </summary>
+        public bool SameEngineConfig(OcrEngineOptions other) =>
+            Model == other.Model
+            && EnableAngleClassification == other.EnableAngleClassification
+            && EnableMkldnn == other.EnableMkldnn
+            && CpuThreads == other.CpuThreads;
+
         /// <summary>线程数上限：再高收益递减，且会和前台应用抢 CPU</summary>
         private const int MaxThreads = 8;
 
@@ -38,6 +50,7 @@ namespace WinKit.Translate.Services
             s.OcrEnableAngleClassification,
             s.OcrEnableMkldnn,
             s.OcrCpuThreads,
-            s.OcrIdleSlimSeconds);
+            s.OcrIdleSlimSeconds,
+            s.OcrAutoInvertDark);
     }
 }

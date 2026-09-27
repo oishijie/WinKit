@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using PaddleOCRSharp;
+using WinKit.Translate.Models;
 
 namespace WinKit.Translate.Services
 {
@@ -33,14 +34,34 @@ namespace WinKit.Translate.Services
             public double CenterY => (Top + Bottom) / 2.0;
         }
 
-        /// <summary>把文本框集合重建为带换行的纯文本，同时输出逐行结果</summary>
-        public static (string Text, IReadOnlyList<string> Lines) Compose(IEnumerable<TextBlock>? blocks)
+        /// <summary>
+        /// 版面还原的完整产物：纯文本 + 段落化行列表 + 带原图坐标的文本框。
+        /// </summary>
+        internal sealed record OcrLayout(
+            string Text,
+            IReadOnlyList<string> Lines,
+            IReadOnlyList<OcrTextBlock> Blocks);
+
+        /// <summary>
+        /// 把文本框集合重建为带换行的纯文本，同时输出逐行结果与带坐标的文本框。
+        /// </summary>
+        /// <param name="blocks">引擎原始文本框（坐标位于预处理后的位图空间）</param>
+        /// <param name="sourceWidth">传入引擎的**原图**宽度，用于坐标反映射后的边界收敛</param>
+        /// <param name="sourceHeight">传入引擎的**原图**高度，同上</param>
+        /// <param name="scale">预处理时的缩放系数（原图 → 送入引擎的位图），默认 1 表示未缩放</param>
+        public static OcrLayout Compose(
+            IEnumerable<TextBlock>? blocks,
+            int sourceWidth = 0,
+            int sourceHeight = 0,
+            double scale = 1.0)
         {
             var fragments = ToFragments(blocks);
             if (fragments.Count == 0)
-                return (string.Empty, Array.Empty<string>());
+                return new OcrLayout(string.Empty, Array.Empty<string>(), Array.Empty<OcrTextBlock>());
 
-            var rawLines = GroupIntoLines(fragments)
+            var grouped = GroupIntoLines(fragments);
+
+            var rawLines = grouped
                 .Select(BuildLine)
                 .Where(l => !string.IsNullOrWhiteSpace(l))
                 .ToList();
@@ -48,7 +69,43 @@ namespace WinKit.Translate.Services
             // 段落合并：将 OCR 硬换行修复为连续段落
             var repaired = RepairLineBreaks(rawLines);
 
-            return (string.Join(Environment.NewLine, repaired), repaired);
+            // 按阅读顺序摊平文本框，并把坐标从「预处理后空间」换算回「原图空间」。
+            // grouped 的行序即自上而下的阅读顺序，行内已按 Left 排好，逐行摊平天然有序。
+            var mapped = new List<OcrTextBlock>(fragments.Count);
+            for (int lineIndex = 0; lineIndex < grouped.Count; lineIndex++)
+            {
+                foreach (var f in grouped[lineIndex])
+                {
+                    mapped.Add(new OcrTextBlock
+                    {
+                        Text = f.Text,
+                        Left = MapCoordinate(f.Left, scale, sourceWidth),
+                        Top = MapCoordinate(f.Top, scale, sourceHeight),
+                        Right = MapCoordinate(f.Right, scale, sourceWidth),
+                        Bottom = MapCoordinate(f.Bottom, scale, sourceHeight),
+                        LineIndex = lineIndex,
+                    });
+                }
+            }
+
+            return new OcrLayout(string.Join(Environment.NewLine, repaired), repaired, mapped);
+        }
+
+        /// <summary>
+        /// 把预处理位图中的坐标换算回原图坐标：除以缩放系数，并收敛到原图范围内。
+        ///
+        /// 必须收敛的原因：放大时双线性插值会让边缘框略微溢出；
+        /// 而 <c>EnableDetUseRect</c> 的矩形矫正也可能把框推到边界外。
+        /// 越界坐标会让下游（在截图上作画）画出画面外的图形。
+        /// </summary>
+        private static int MapCoordinate(int value, double scale, int limit)
+        {
+            if (scale <= 0) scale = 1.0;
+
+            int mapped = (int)Math.Round(value / scale);
+            if (mapped < 0) return 0;
+            if (limit > 0 && mapped > limit) return limit;
+            return mapped;
         }
 
         // ── 1. 归一化为带包围盒的片段 ────────────────────────────

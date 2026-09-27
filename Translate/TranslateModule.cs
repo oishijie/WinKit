@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using WinKit.Capture;
 using WinKit.Common;
 using WinKit.Translate.Services;
 
@@ -21,9 +23,6 @@ namespace WinKit.Translate
         [DllImport("user32.dll")]
         private static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
 
-        [DllImport("gdi32.dll")]
-        private static extern bool DeleteObject(IntPtr hObject);
-
         private const byte VK_CONTROL = 0x11;
         private const byte VK_C = 0x43;
         private const byte VK_MENU = 0x12;   // Alt
@@ -34,22 +33,39 @@ namespace WinKit.Translate
         private ITranslator _translator;
         private TranslatorOptions _translatorOptions;
         private readonly IOcrProvider _ocr;
+        private readonly OcrHistoryStore _history;
         private HotkeyService _hotkey;
 
         private ResultWindow? _resultWindow;
-        private bool _busy;
+        /// <summary>
+        /// 当前正在跑的任务的取消源。新触发会取消它 —— 连按热键的意图就是「重来一次」，
+        /// 旧版遇到正在运行就静默 return，用户会觉得程序卡住了。
+        /// </summary>
+        private CancellationTokenSource? _runCts;
         private bool _enabled;
         private bool _disposed;
         /// <summary>当前已注册热键的快照，供设置变更时判断"快捷键是否真变"、避免无关改动触发整组重注册</summary>
         private HotkeySnapshot? _appliedHotkeys;
+        /// <summary>热键是否因设置中心正在录制而被临时挂起（挂起期间不再响应配置变更重注册）</summary>
+        private bool _hotkeysSuspended;
+
+        /// <summary>热键标识 → 触发的链路。与 <see cref="HotkeyCatalog"/> 的 Id 一一对应。</summary>
+        private readonly Dictionary<string, Func<CancellationToken, Task>> _hotkeyActions;
 
         public bool IsEnabled => _enabled;
 
-        /// <summary>截图快捷键触发后完成的截图（供剪贴板模块订阅存入历史）</summary>
-        public event EventHandler<System.Windows.Media.Imaging.BitmapSource>? ScreenshotCaptured;
+        /// <summary>
+        /// 热键注册失败（组合已被其它程序抢占、或与系统保留键冲突）。
+        /// 参数为热键显示名。UI 层据此提示用户「改了这个键但没生效」——
+        /// 旧版忽略返回值，用户会以为设置没保存。
+        /// </summary>
+        public event EventHandler<string>? HotkeyRegistrationFailed;
 
         /// <summary>当前 OCR 引擎显示名（含实际加载的模型）</summary>
         public string OcrEngineName => _ocr.Name;
+
+        /// <summary>识别历史存储（供设置中心的「识别历史」卡片读写）</summary>
+        public OcrHistoryStore History => _history;
 
         /// <summary>OCR 引擎是否已完成初始化，可立即识别</summary>
         public bool OcrIsReady => _ocr.IsReady;
@@ -68,7 +84,16 @@ namespace WinKit.Translate
             _translatorOptions = TranslatorOptions.FromSettings(settingsManager.Settings);
             _translator = CreateTranslator(_translatorOptions);
             _ocr = new PaddleOcrProvider(OcrEngineOptions.FromSettings(settingsManager.Settings));
+            _history = new OcrHistoryStore();
             _hotkey = new HotkeyService();
+
+            _hotkeyActions = new Dictionary<string, Func<CancellationToken, Task>>
+            {
+                ["screenshotTranslate"] = ScreenshotTranslateAsync,
+                ["selectionTranslate"] = SelectionTranslateAsync,
+                ["ocrOnly"] = OcrOnlyAsync,
+                ["silentOcr"] = SilentOcrAsync,
+            };
 
             // 配置变更后同步引擎参数（内部会判断是否真的需要重建）
             _settingsManager.SettingsChanged += OnSettingsChanged;
@@ -108,6 +133,9 @@ namespace WinKit.Translate
 
             // 仅当快捷键字段真的变化时才重新注册整组热键，
             // 避免无关设置改动（如 OCR 线程数、翻译引擎）引发不必要的注销/注册抖动。
+            // 录制期间热键已整体注销，此处直接跳过——由 ResumeHotkeys 统一按最新配置注册。
+            if (_hotkeysSuspended) return;
+
             if (_enabled)
             {
                 var newKeys = HotkeySnapshot.FromSettings(settings);
@@ -119,24 +147,9 @@ namespace WinKit.Translate
             }
         }
 
-        /// <summary>获取当前快捷键描述（供托盘菜单 / 设置中心动态显示）</summary>
-        public string[] GetHotkeyDescriptions()
-        {
-            var s = _settingsManager.Settings;
-            return new[]
-            {
-                $"截图翻译    {HotkeyConfig.Format(s.HotkeyScreenshotTranslate.VK, s.HotkeyScreenshotTranslate.Modifiers)}",
-                $"划词翻译    {HotkeyConfig.Format(s.HotkeySelectionTranslate.VK, s.HotkeySelectionTranslate.Modifiers)}",
-                $"文字识别    {HotkeyConfig.Format(s.HotkeyOcrOnly.VK, s.HotkeyOcrOnly.Modifiers)}",
-                $"静默OCR     {HotkeyConfig.Format(s.HotkeySilentOcr.VK, s.HotkeySilentOcr.Modifiers)}",
-                $"截图到剪贴板  {HotkeyConfig.Format(s.HotkeyScreenshot.VK, s.HotkeyScreenshot.Modifiers)}",
-            };
-        }
-
         /// <summary>按配置创建一个翻译器实例</summary>
         private static ITranslator CreateTranslator(TranslatorOptions o) => o.Provider switch
         {
-            "baidu" => new BaiduTranslator(o.BaiduAppId, o.BaiduApiKey),
             "openai" or "deepseek" => new OpenAITranslator(o.OpenAIApiKey, o.OpenAIBaseUrl, o.OpenAIModel, o.SkipCertValidation),
             _ => new GoogleTranslator(),
         };
@@ -147,17 +160,14 @@ namespace WinKit.Translate
         /// 注意：不含源/目标语言，因为翻译时实时读取最新设置。
         /// </summary>
         private sealed record TranslatorOptions(
-            string Provider, string OpenAIApiKey, string OpenAIBaseUrl, string OpenAIModel, bool SkipCertValidation,
-            string BaiduAppId, string BaiduApiKey)
+            string Provider, string OpenAIApiKey, string OpenAIBaseUrl, string OpenAIModel, bool SkipCertValidation)
         {
             public static TranslatorOptions FromSettings(AppSettings s) => new(
                 (s.TranslateProvider ?? "deepseek").ToLowerInvariant(),
                 s.OpenAIApiKey ?? "",
                 s.OpenAIBaseUrl ?? "",
                 s.OpenAIModel ?? "",
-                s.OpenAISkipCertValidation,
-                s.BaiduAppId ?? "",
-                s.BaiduApiKey ?? "");
+                s.OpenAISkipCertValidation);
         }
 
         /// <summary>
@@ -169,50 +179,57 @@ namespace WinKit.Translate
             (int VK, int Modifiers) ScreenshotTranslate,
             (int VK, int Modifiers) SelectionTranslate,
             (int VK, int Modifiers) OcrOnly,
-            (int VK, int Modifiers) SilentOcr,
-            (int VK, int Modifiers) Screenshot)
+            (int VK, int Modifiers) SilentOcr)
         {
             public static HotkeySnapshot FromSettings(AppSettings s) => new(
-                (s.HotkeyScreenshotTranslate.VK, s.HotkeyScreenshotTranslate.Modifiers),
-                (s.HotkeySelectionTranslate.VK, s.HotkeySelectionTranslate.Modifiers),
-                (s.HotkeyOcrOnly.VK, s.HotkeyOcrOnly.Modifiers),
-                (s.HotkeySilentOcr.VK, s.HotkeySilentOcr.Modifiers),
-                (s.HotkeyScreenshot.VK, s.HotkeyScreenshot.Modifiers));
+                Snapshot(s.HotkeyScreenshotTranslate),
+                Snapshot(s.HotkeySelectionTranslate),
+                Snapshot(s.HotkeyOcrOnly),
+                Snapshot(s.HotkeySilentOcr));
+
+            /// <summary>配置文件里若把热键写成 null 也能安全取值</summary>
+            private static (int VK, int Modifiers) Snapshot(HotkeyConfig? c) => (c?.VK ?? 0, c?.Modifiers ?? 0);
         }
 
         /// <summary>根据配置启用/停用模块热键</summary>
         public void Start()
         {
             if (_enabled) return;
-            var s = _settingsManager.Settings;
-            if (!s.TranslateEnable) return;
+            if (!_settingsManager.Settings.TranslateEnable) return;
 
-            // 每次启用都重建 HotkeyService（旧的可能在 Stop 时被 Dispose）
+            _enabled = true;
+            RegisterHotkeys();
+        }
+
+        /// <summary>按当前配置注册本模块的全部热键（清单由 <see cref="HotkeyCatalog"/> 驱动）</summary>
+        private void RegisterHotkeys()
+        {
+            _hotkeysSuspended = false;
+
+            // 每次注册都重建 HotkeyService（旧的可能已被 Stop / Suspend 注销）
             _hotkey.Dispose();
             _hotkey = new HotkeyService();
 
-            // 从配置读取快捷键（用户可在设置中心自定义，AppSettings 属性初始化器保证非 null）
-            var hkScreenshot = s.HotkeyScreenshotTranslate;
-            var hkSelection = s.HotkeySelectionTranslate;
-            var hkOcrOnly = s.HotkeyOcrOnly;
-            var hkSilent = s.HotkeySilentOcr;
+            foreach (var descriptor in HotkeyCatalog.All)
+            {
+                if (descriptor.Owner != HotkeyOwner.Translate) continue;
+                if (!_hotkeyActions.TryGetValue(descriptor.Id, out var action)) continue;
 
-            // 截图翻译（默认 Alt+S）
-            _hotkey.Register((uint)hkScreenshot.VK, hkScreenshot.Modifiers, () => RunAsync(ScreenshotTranslateAsync));
-            // 划词翻译（默认 Alt+D）
-            _hotkey.Register((uint)hkSelection.VK, hkSelection.Modifiers, () => RunAsync(SelectionTranslateAsync));
-            // 本地 OCR 仅识别（默认 Alt+Shift+S）
-            _hotkey.Register((uint)hkOcrOnly.VK, hkOcrOnly.Modifiers, () => RunAsync(OcrOnlyAsync));
-            // 静默 OCR（默认 Alt+Shift+F）
-            _hotkey.Register((uint)hkSilent.VK, hkSilent.Modifiers, () => RunAsync(SilentOcrAsync));
+                var hk = descriptor.Get(_settingsManager.Settings);
+                string label = descriptor.Label;   // 闭包捕获，提示文案要独立于循环变量
 
-            // 截图到剪贴板历史（默认 Alt+A）
-            var hkClipScreenshot = s.HotkeyScreenshot;
-            _hotkey.Register((uint)hkClipScreenshot.VK, hkClipScreenshot.Modifiers, () => RunAsync(ScreenshotToClipboardAsync));
+                if (!_hotkey.Register((uint)hk.VK, hk.Modifiers, () => RunAsync(action)))
+                {
+                    // 注册失败（多为组合已被其它程序占用）不再静默：上报给 UI 层提示用户
+                    System.Diagnostics.Debug.WriteLine($"TranslateModule: 热键注册失败 {label}");
+                    HotkeyRegistrationFailed?.Invoke(this, label);
+                }
+            }
 
-            _enabled = true;
+            // 截图（Alt+A）已移交 CaptureModule 独立接管，本模块不再注册
+
             // 记录当前已注册的热键，供设置变更时判断是否需要重注册
-            _appliedHotkeys = HotkeySnapshot.FromSettings(s);
+            _appliedHotkeys = HotkeySnapshot.FromSettings(_settingsManager.Settings);
         }
 
         public void Stop()
@@ -220,6 +237,29 @@ namespace WinKit.Translate
             if (!_enabled) return;
             _hotkey.Dispose();
             _enabled = false;
+        }
+
+        /// <summary>
+        /// 临时注销本模块全部热键 —— 设置中心进入快捷键录制时由 App 层调用。
+        ///
+        /// 必须挂起的原因：录制时若用户按下「当前已生效的组合」（如 Alt+S），
+        /// Windows 会把 WM_HOTKEY 直接发给注册者，设置窗收不到这个键；
+        /// 同时弹出的翻译/截图窗口会让设置窗失焦，进而触发 OnDeactivated 取消录制。
+        /// 表现就是「快捷键改不了」。
+        /// </summary>
+        public void SuspendHotkeys()
+        {
+            if (_hotkeysSuspended) return;
+            _hotkeysSuspended = true;
+            _hotkey.Dispose();
+        }
+
+        /// <summary>录制结束，按最新配置恢复热键</summary>
+        public void ResumeHotkeys()
+        {
+            if (!_hotkeysSuspended) return;
+            _hotkeysSuspended = false;
+            if (_enabled) RegisterHotkeys();
         }
 
         /// <summary>切换启用状态（供托盘调用）</summary>
@@ -242,16 +282,17 @@ namespace WinKit.Translate
         // ══════════════════════════════════════════════
 
         /// <summary>Alt+S 截图翻译：截图 → OCR → 翻译 → 结果窗</summary>
-        private async Task ScreenshotTranslateAsync()
+        private async Task ScreenshotTranslateAsync(CancellationToken ct)
         {
             var region = await CaptureSelectionAsync().ConfigureAwait(true);
-            if (region == null) return; // 用户取消
+            if (region == null || ct.IsCancellationRequested) return; // 用户取消
 
             var window = EnsureResultWindow();
             window.SetLoading("截图翻译", "译文", OcrLoadingHint());
             window.ShowAtMouse();
 
-            var ocr = await OcrAsync(region.Value).ConfigureAwait(true);
+            var ocr = await OcrAsync(region.Value, ct).ConfigureAwait(true);
+            if (ct.IsCancellationRequested) return;   // 期间用户又触发了一次，本次结果作废
             if (!ocr.Success || string.IsNullOrWhiteSpace(ocr.Text))
             {
                 window.SetResult("截图翻译", "译文", "", status: ocr.Error ?? "未识别到文字", success: false);
@@ -259,7 +300,8 @@ namespace WinKit.Translate
             }
 
             window.SetLoading("截图翻译", "译文", "翻译中…");
-            var t = await TranslateAsync(ocr.Text).ConfigureAwait(true);
+            var t = await TranslateAsync(ocr.Text, ct).ConfigureAwait(true);
+            if (ct.IsCancellationRequested) return;
             if (!t.Success)
             {
                 window.SetResult("截图翻译", "译文", "", source: ocr.Text, status: t.Error, success: false);
@@ -271,13 +313,14 @@ namespace WinKit.Translate
         }
 
         /// <summary>Alt+D 划词翻译：模拟 Ctrl+C → 翻译 → 结果窗</summary>
-        private async Task SelectionTranslateAsync()
+        private async Task SelectionTranslateAsync(CancellationToken ct)
         {
             var window = EnsureResultWindow();
             window.SetLoading("划词翻译", "译文", "正在获取选中文本…");
             window.ShowAtMouse();
 
             var selected = await GetSelectionTextAsync().ConfigureAwait(true);
+            if (ct.IsCancellationRequested) return;
             if (string.IsNullOrWhiteSpace(selected))
             {
                 window.SetResult("划词翻译", "译文", "", status: "未获取到选中文本", success: false);
@@ -285,7 +328,8 @@ namespace WinKit.Translate
             }
 
             window.SetLoading("划词翻译", "译文", "翻译中…");
-            var t = await TranslateAsync(selected).ConfigureAwait(true);
+            var t = await TranslateAsync(selected, ct).ConfigureAwait(true);
+            if (ct.IsCancellationRequested) return;
             if (!t.Success)
             {
                 window.SetResult("划词翻译", "译文", "", source: selected, status: t.Error, success: false);
@@ -296,16 +340,17 @@ namespace WinKit.Translate
         }
 
         /// <summary>Alt+Shift+S OCR 识别：截图 → OCR → 结果窗（不翻译）</summary>
-        private async Task OcrOnlyAsync()
+        private async Task OcrOnlyAsync(CancellationToken ct)
         {
             var region = await CaptureSelectionAsync().ConfigureAwait(true);
-            if (region == null) return;
+            if (region == null || ct.IsCancellationRequested) return;
 
             var window = EnsureResultWindow();
             window.SetLoading("文字识别", "识别结果", OcrLoadingHint());
             window.ShowAtMouse();
 
-            var ocr = await OcrAsync(region.Value).ConfigureAwait(true);
+            var ocr = await OcrAsync(region.Value, ct).ConfigureAwait(true);
+            if (ct.IsCancellationRequested) return;
             if (!ocr.Success || string.IsNullOrWhiteSpace(ocr.Text))
             {
                 window.SetResult("文字识别", "识别结果", "", status: ocr.Error ?? "未识别到文字", success: false);
@@ -316,12 +361,13 @@ namespace WinKit.Translate
         }
 
         /// <summary>Alt+Shift+F 静默 OCR：截图 → OCR → 自动复制到剪贴板（不弹窗）</summary>
-        private async Task SilentOcrAsync()
+        private async Task SilentOcrAsync(CancellationToken ct)
         {
             var region = await CaptureSelectionAsync().ConfigureAwait(true);
-            if (region == null) return;
+            if (region == null || ct.IsCancellationRequested) return;
 
-            var ocr = await OcrAsync(region.Value).ConfigureAwait(true);
+            var ocr = await OcrAsync(region.Value, ct).ConfigureAwait(true);
+            if (ct.IsCancellationRequested) return;
             if (!ocr.Success || string.IsNullOrWhiteSpace(ocr.Text))
             {
                 System.Diagnostics.Debug.WriteLine($"静默 OCR 失败: {ocr.Error}");
@@ -360,72 +406,71 @@ namespace WinKit.Translate
             });
         }
         
-        /// <summary>
-        /// 弹出截图选区，返回选中区域的 BitmapSource（供剪贴板等外部模块调用）。
-        /// 用户取消返回 null。
-        /// </summary>
-        public async Task<System.Windows.Media.Imaging.BitmapSource?> CaptureScreenshotAsync()
-        {
-            var region = await CaptureSelectionAsync().ConfigureAwait(true);
-            if (region == null) return null;
-        
-            using var bitmap = ScreenshotService.CaptureRegion(region.Value);
-            if (bitmap == null) return null;
-        
-            // System.Drawing.Bitmap → BitmapSource
-            var handle = bitmap.GetHbitmap();
-            try
-            {
-                var source = System.Windows.Interop.Imaging.CreateBitmapSourceFromHBitmap(
-                    handle, System.IntPtr.Zero,
-                    System.Windows.Int32Rect.Empty,
-                    System.Windows.Media.Imaging.BitmapSizeOptions.FromEmptyOptions());
-                source.Freeze(); // 跨线程安全
-                return source;
-            }
-            finally
-            {
-                DeleteObject(handle);
-            }
-        }
-
-        /// <summary>截图快捷键触发：截屏 → 触发 ScreenshotCaptured 事件</summary>
-        private async Task ScreenshotToClipboardAsync()
-        {
-            var bitmap = await CaptureScreenshotAsync();
-            if (bitmap != null)
-                ScreenshotCaptured?.Invoke(this, bitmap);
-        }
-
-        private async Task<Models.OcrResult> OcrAsync(System.Drawing.Rectangle region)
+        private async Task<Models.OcrResult> OcrAsync(System.Drawing.Rectangle region, CancellationToken ct)
         {
             using var bitmap = ScreenshotService.CaptureRegion(region);
             if (bitmap == null)
                 return Models.OcrResult.Fail("截图区域无效");
 
-            return await _ocr.RecognizeAsync(bitmap, CancellationToken.None).ConfigureAwait(true);
+            // 传入真实 token：原生推理本身不可中断，但「排队等信号量」这一段能立刻取消，
+            // 长识别跑完后也会由调用方按 token 丢弃结果，不会用过期结果覆盖界面。
+            var result = await _ocr.RecognizeAsync(bitmap, ct).ConfigureAwait(true);
+            if (ct.IsCancellationRequested)
+                return Models.OcrResult.Fail("识别已取消");
+
+            RecordHistory(result);
+            return result;
+        }
+
+        /// <summary>
+        /// 把成功的识别结果落进历史。
+        /// 三条链路（截图翻译 / 文字识别 / 静默 OCR）都经过 <see cref="OcrAsync"/>，
+        /// 因此在这里记录一次即可全覆盖；写库失败只记日志，绝不影响识别主流程。
+        /// </summary>
+        private void RecordHistory(Models.OcrResult result)
+        {
+            if (!result.Success || string.IsNullOrWhiteSpace(result.Text)) return;
+
+            try
+            {
+                _history.Add(new Models.OcrHistoryItem
+                {
+                    Text = result.Text,
+                    CharCount = result.Text.Length,
+                    BlockCount = result.BlockCount,
+                    ElapsedMs = result.ElapsedMs,
+                    Model = _ocr.Name,
+                    AutoInverted = result.AutoInverted,
+                }, _settingsManager.Settings.OcrHistoryMaxItems);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"写入识别历史失败: {ex.Message}");
+            }
         }
 
         /// <summary>识别中的提示语：引擎尚未就绪时说明正在加载模型，避免用户以为卡死</summary>
         private string OcrLoadingHint() =>
             _ocr.IsReady ? "识别中…" : "正在加载本地 OCR 模型（约需数秒）…";
 
-        /// <summary>识别成功后的状态栏文案（含模型回退提示）</summary>
+        /// <summary>识别成功后的状态栏文案（含模型回退与深色反色提示）</summary>
         private string OcrStatus(Models.OcrResult ocr)
         {
             var text = $"{_ocr.Name} · {ocr.BlockCount} 块 · {ocr.ElapsedMs} ms";
+            if (ocr.AutoInverted)
+                text += " · 已反色";
             if (_ocr is PaddleOcrProvider p && p.FallbackNotice != null)
                 text += $" · {p.FallbackNotice}";
             return text;
         }
 
-        private async Task<Models.TranslationResult> TranslateAsync(string text)
+        private async Task<Models.TranslationResult> TranslateAsync(string text, CancellationToken ct)
         {
             var s = _settingsManager.Settings;
             try
             {
                 var (translation, detected) = await _translator.TranslateAsync(
-                    text, s.TranslateSourceLang, s.TranslateTargetLang, CancellationToken.None)
+                    text, s.TranslateSourceLang, s.TranslateTargetLang, ct)
                     .ConfigureAwait(true);
 
                 // 智能跳过：检测到的源语言与目标语言相同时，跳过翻译直接返回原文
@@ -476,7 +521,9 @@ namespace WinKit.Translate
             var title = window.CurrentTitle;
             window.SetLoading(title, "译文", "翻译中…");
 
-            var t = await TranslateAsync(e.Text).ConfigureAwait(true);
+            // 结果窗按钮是用户主动点击的，不参与热键那套「新触发取消旧触发」，
+            // 因此这里给一个不会被取消的 token
+            var t = await TranslateAsync(e.Text, CancellationToken.None).ConfigureAwait(true);
             if (t.Success)
                 window.SetResult(title, "译文", t.Target,
                     source: e.Text, actionText: e.Text, status: _translator.Name);
@@ -576,29 +623,60 @@ namespace WinKit.Translate
                 paddle.RequestSlimNow();
         }
 
-        /// <summary>统一的异步入口，串行化与异常兜底</summary>
-        private async void RunAsync(Func<Task> task)
+        /// <summary>
+        /// 统一的异步入口：可取消 + 异常兜底。
+        ///
+        /// 并发语义与旧版相反 —— 旧版遇到「已有任务在跑」直接 return，
+        /// 用户连按两次热键时第二次毫无反应，会以为程序卡死或热键坏了。
+        /// 现在改为「新请求取消旧请求」，因为连按热键的真实意图就是重来一次。
+        /// </summary>
+        private async void RunAsync(Func<CancellationToken, Task> task)
         {
-            if (_busy) return;
-            _busy = true;
+            // 取消上一次：旧 token 立即失效，其后续每一步的界面写入都会被拦下。
+            // 这里只 Cancel 不 Dispose —— 旧任务仍可能正持有该 token 等信号量，
+            // 提前释放会让它在 Register 时撞上 ObjectDisposedException；
+            // 释放交给它自己的 finally 处理（Dispose 幂等，不必担心重复）。
+            var previous = _runCts;
+            if (previous != null)
+            {
+                try { previous.Cancel(); }
+                catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"取消上次任务失败: {ex.Message}"); }
+            }
+
+            var cts = new CancellationTokenSource();
+            _runCts = cts;
+
             try
             {
-                await task().ConfigureAwait(true);
+                await task(cts.Token).ConfigureAwait(true);
+            }
+            catch (OperationCanceledException)
+            {
+                // 被后一次触发顶掉，属正常流程，不弹错误
+                System.Diagnostics.Debug.WriteLine("Translate 模块：本次任务已被新的触发取代");
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Translate 模块异常: {ex}");
-                try
+                if (!cts.IsCancellationRequested)
                 {
-                    var w = EnsureResultWindow();
-                    w.SetResult("翻译", "译文", "", status: ex.Message, success: false);
-                    w.ShowAtMouse();
+                    try
+                    {
+                        var w = EnsureResultWindow();
+                        w.SetResult("翻译", "译文", "", status: ex.Message, success: false);
+                        w.ShowAtMouse();
+                    }
+                    catch (Exception ex2) { System.Diagnostics.Debug.WriteLine($"RunAsync 错误展示失败: {ex2.Message}"); }
                 }
-                catch (Exception ex2) { System.Diagnostics.Debug.WriteLine($"RunAsync 错误展示失败: {ex2.Message}"); }
             }
             finally
             {
-                _busy = false;
+                // 只有「自己仍是最新一次」时才复位，避免被顶掉的旧任务清掉新任务的状态
+                if (ReferenceEquals(_runCts, cts))
+                {
+                    _runCts = null;
+                }
+                try { cts.Dispose(); } catch { /* 已释放则忽略 */ }
             }
         }
 
@@ -606,9 +684,12 @@ namespace WinKit.Translate
         {
             if (_disposed) return;
             _disposed = true;
+            // 正在跑的识别/翻译任务随之取消，避免退出时还有回调往已释放的窗口写数据
+            try { _runCts?.Cancel(); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"TranslateModule.Dispose(cts): {ex.Message}"); }
             try { _settingsManager.SettingsChanged -= OnSettingsChanged; } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"TranslateModule.Dispose(unsub): {ex.Message}"); }
             try { _hotkey.Dispose(); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"TranslateModule.Dispose(hotkey): {ex.Message}"); }
             try { _ocr.Dispose(); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"TranslateModule.Dispose(ocr): {ex.Message}"); }
+            try { _history.Dispose(); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"TranslateModule.Dispose(history): {ex.Message}"); }
         }
     }
 }

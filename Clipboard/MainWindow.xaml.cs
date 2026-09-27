@@ -28,9 +28,6 @@ namespace WinKit.Clipboard
         /// <summary>是否钉住窗口（钉住后失焦不自动隐藏）</summary>
         private bool _isPinned = false;
 
-        /// <summary>点击截图按钮时触发，由 App 层接线截图逻辑</summary>
-        public event EventHandler? ScreenshotRequested;
-
         [DllImport("user32.dll")]
         private static extern bool GetCursorPos(out POINT lpPoint);
 
@@ -158,13 +155,6 @@ namespace WinKit.Clipboard
                 PinBtn.Content = "📌";
                 PinBtn.ToolTip = "钉住窗口";
             }
-        }
-
-        private void ScreenshotBtn_Click(object sender, RoutedEventArgs e)
-        {
-            // 先隐藏自己，避免被截进截图
-            Hide();
-            ScreenshotRequested?.Invoke(this, EventArgs.Empty);
         }
 
         private void ClipboardList_MouseDoubleClick(object sender, MouseButtonEventArgs e)

@@ -6,12 +6,13 @@ using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Threading;
+using WinKit.Translate.Models;
 using WinKit.Translate.Services;
 
 namespace WinKit.Common
 {
     /// <summary>
-    /// 统一设置中心 — 四个分区：通用 / 剪贴板 / 翻译与 OCR / 关于。
+    /// 统一设置中心 — 六个分区：通用 / 待办 / 剪贴板 / 截图 / 翻译与 OCR / 关于。
     ///
     /// 交互约定（对标 SnapFind 控制中心，但更轻）：
     ///   · 改一项存一项、即时生效，没有「保存 / 取消」按钮；
@@ -24,6 +25,7 @@ namespace WinKit.Common
         public const string SectionGeneral = "general";
         public const string SectionTodo = "todo";
         public const string SectionClipboard = "clipboard";
+        public const string SectionCapture = "capture";
         public const string SectionTranslate = "translate";
         public const string SectionAbout = "about";
 
@@ -41,16 +43,19 @@ namespace WinKit.Common
         private int _recordingIndex = -1;
         private Border? _recordingCap;
         private int _recordingModifiers;
-        private static readonly string[] HotkeySettingNames = {
-            nameof(AppSettings.HotkeyScreenshotTranslate),
-            nameof(AppSettings.HotkeySelectionTranslate),
-            nameof(AppSettings.HotkeyOcrOnly),
-            nameof(AppSettings.HotkeySilentOcr),
-            nameof(AppSettings.HotkeyScreenshot),
-        };
-        private static readonly string[] HotkeyLabels = {
-            "截图翻译", "划词翻译", "文字识别", "静默 OCR（识别后直接复制）", "截图到剪贴板",
-        };
+
+        /// <summary>为 true 时忽略窗口失焦 —— 弹出的模态提示会短暂夺焦，不该因此取消录制</summary>
+        private bool _suppressDeactivateCancel;
+
+        /// <summary>
+        /// 快捷键录制状态变化：true = 进入录制，false = 结束（提交或取消）。
+        ///
+        /// App 层据此挂起 / 恢复各模块的全局热键。必须这么做：录制时若用户按下
+        /// 「当前已生效的组合」（Alt+S / Alt+A 等），Windows 会把 WM_HOTKEY 直接发给注册者，
+        /// 设置窗根本收不到这个键；同时弹出的截图 / 翻译窗还会把本窗顶得失焦，
+        /// 触发 OnDeactivated 取消录制。表现就是「快捷键怎么改都改不了」。
+        /// </summary>
+        public event EventHandler<bool>? HotkeyRecordingChanged;
 
         public SettingsWindow(SettingsManager settingsManager)
         {
@@ -89,8 +94,9 @@ namespace WinKit.Common
                 {
                     SectionTodo => 1,
                     SectionClipboard => 2,
-                    SectionTranslate => 3,
-                    SectionAbout => 4,
+                    SectionCapture => 3,
+                    SectionTranslate => 4,
+                    SectionAbout => 5,
                     _ => 0,
                 };
             }
@@ -109,10 +115,13 @@ namespace WinKit.Common
             base.OnClosing(e);
         }
 
-        /// <summary>窗口失去焦点时取消录制</summary>
+        /// <summary>
+        /// 窗口失去焦点时取消录制（录制中切走视为放弃）。
+        /// 例外：弹出的模态提示会短暂夺焦，这时用 _suppressDeactivateCancel 挡掉。
+        /// </summary>
         protected override void OnDeactivated(EventArgs e)
         {
-            CancelRecording();
+            if (!_suppressDeactivateCancel) CancelRecording();
             base.OnDeactivated(e);
         }
 
@@ -143,23 +152,27 @@ namespace WinKit.Common
                 ClipDedupToggle.IsChecked = s.PasteEnableTextDeduplication;
                 UpdateClipCount();
                 ClipDetailCard.IsEnabled = s.PasteEnableMonitoring;
+                ClipHotkeyCard.IsEnabled = s.PasteEnableMonitoring;
 
-                // ④ 翻译与 OCR
+                // ④ 截图
+                CaptureAutoCopyToggle.IsChecked = s.CaptureAutoCopy;
+                CaptureOpenEditorToggle.IsChecked = s.CaptureOpenEditor;
+
+                // ⑤ 翻译与 OCR
                 TranslateToggle.IsChecked = s.TranslateEnable;
                 SelectByTag(ProviderCombo, s.TranslateProvider, "deepseek");
                 OpenAIApiKeyBox.Text = s.OpenAIApiKey ?? "";
                 OpenAIBaseUrlBox.Text = s.OpenAIBaseUrl ?? "";
                 OpenAIModelBox.Text = s.OpenAIModel ?? "";
                 OpenAISkipCertToggle.IsChecked = s.OpenAISkipCertValidation;
-                BaiduAppIdBox.Text = s.BaiduAppId ?? "";
-                BaiduApiKeyBox.Text = s.BaiduApiKey ?? "";
                 SyncOpenAICard(s.TranslateEnable);
-                SyncBaiduCard(s.TranslateEnable);
                 SelectByTag(TargetLangCombo, s.TranslateTargetLang, "zh-CN");
                 SelectByTag(SourceLangCombo, s.TranslateSourceLang, "auto");
                 SelectByTag(SearchEngineCombo, (s.OcrSearchEngine ?? "bing").ToLowerInvariant(), "bing");
+                OcrHistoryMaxBox.Text = Clamp(s.OcrHistoryMaxItems, 10, 1000).ToString();
                 SelectModel(OcrModelCatalog.Parse(s.OcrModel));
                 AngleClsToggle.IsChecked = s.OcrEnableAngleClassification;
+                InvertDarkToggle.IsChecked = s.OcrAutoInvertDark;
                 MkldnnToggle.IsChecked = s.OcrEnableMkldnn;
                 ThreadsBox.Text = Clamp(s.OcrCpuThreads, 0, 32).ToString();
                 ThreadsHintText.Text = $"0 = 按机器自动选择（本机 {Environment.ProcessorCount} 逻辑核，上限 8 线程）";
@@ -168,9 +181,8 @@ namespace WinKit.Common
                 PreloadToggle.IsChecked = s.OcrPreloadOnStartup;
                 TranslateCard.IsEnabled = s.TranslateEnable;
                 OcrCard.IsEnabled = s.TranslateEnable;
-                BaiduCard.IsEnabled = s.TranslateEnable;
 
-                // ⑤ 关于
+                // ⑥ 关于
                 var version = Assembly.GetExecutingAssembly().GetName().Version;
                 VersionText.Text = version != null ? $"v{version.ToString(3)}" : "v1.0.0";
                 RefreshOcrStatus();
@@ -209,23 +221,30 @@ namespace WinKit.Common
             // 如果正在录制，先取消
             _recordingIndex = -1;
             _recordingCap = null;
-        
+            _recordingModifiers = 0;
+
+            // 分区归属由 HotkeyCatalog 决定：待办页 1 条、翻译与 OCR 页 4 条、截图页 1 条、剪贴板页 1 条
+            BuildHotkeyRows(HotkeyCatalog.IndicesOf(HotkeyOwner.Todo), TodoHotkeyPanel);
+            BuildHotkeyRows(HotkeyCatalog.IndicesOf(HotkeyOwner.Translate), HotkeyPanel);
+            BuildHotkeyRows(HotkeyCatalog.IndicesOf(HotkeyOwner.Capture), CaptureHotkeyPanel);
+            BuildHotkeyRows(HotkeyCatalog.IndicesOf(HotkeyOwner.Clipboard), ClipboardHotkeyPanel);
+        }
+
+        /// <summary>把指定下标的快捷键渲染成行追加到目标面板（下标沿用 HotkeyCatalog 的全局体系）</summary>
+        private void BuildHotkeyRows(int[] indices, Panel panel)
+        {
             var s = _settingsManager.Settings;
-            var configs = new[]
+
+            panel.Children.Clear();
+            for (int n = 0; n < indices.Length; n++)
             {
-                s.HotkeyScreenshotTranslate,
-                s.HotkeySelectionTranslate,
-                s.HotkeyOcrOnly,
-                s.HotkeySilentOcr,
-                s.HotkeyScreenshot,
-            };
-        
-            HotkeyPanel.Children.Clear();
-            for (int i = 0; i < configs.Length; i++)
-            {
-                if (i > 0)
+                int i = indices[n];
+                var descriptor = HotkeyCatalog.All[i];
+                var config = descriptor.Get(s);
+
+                if (n > 0)
                 {
-                    HotkeyPanel.Children.Add(new Border
+                    panel.Children.Add(new Border
                     {
                         Height = 1,
                         Background = new System.Windows.Media.SolidColorBrush(
@@ -233,42 +252,61 @@ namespace WinKit.Common
                         Margin = new Thickness(0, 8, 0, 8),
                     });
                 }
-        
+
                 var grid = new Grid();
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
                 grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
-        
+
                 var label = new TextBlock
                 {
-                    Text = HotkeyLabels[i],
+                    Text = descriptor.Label,
                     FontSize = 13,
                     Foreground = new System.Windows.Media.SolidColorBrush(
                         System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x22)),
                     VerticalAlignment = VerticalAlignment.Center,
                 };
                 Grid.SetColumn(label, 0);
-        
+
+                // 键帽外观（文字 / 颜色 / 重复标红 / ToolTip）统一交给 ApplyCapAppearance，
+                // 与录制取消后的恢复路径共用同一套判定，避免两处规则跑偏
                 var cap = new Border
                 {
                     Style = (Style)FindResource("KeyCap"),
                     Cursor = System.Windows.Input.Cursors.Hand,
-                    ToolTip = "点击修改快捷键",
                     Child = new TextBlock
                     {
-                        Text = HotkeyConfig.Format(configs[i].VK, configs[i].Modifiers),
                         FontSize = 11,
                         FontFamily = new System.Windows.Media.FontFamily("Consolas, Segoe UI"),
-                        Foreground = new System.Windows.Media.SolidColorBrush(
-                            System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44)),
                     },
                 };
+                ApplyCapAppearance(cap, i, config);
+
                 int idx = i; // 捕获循环变量
-                cap.MouseLeftButtonDown += (s, e) => StartHotkeyRecording(idx, cap);
+                cap.MouseLeftButtonDown += (_, e) =>
+                {
+                    StartHotkeyRecording(idx, cap);
+                    e.Handled = true;
+                };
                 Grid.SetColumn(cap, 1);
-        
+
                 grid.Children.Add(label);
                 grid.Children.Add(cap);
-                HotkeyPanel.Children.Add(grid);
+                panel.Children.Add(grid);
+            }
+
+            // 操作提示。「清空」是最不直观的一项 —— 不在界面上写明，用户根本不会知道
+            // 录制时按 Delete 可以留空，只会以为「必须选一个组合」。
+            if (indices.Length > 0)
+            {
+                panel.Children.Add(new TextBlock
+                {
+                    Text = "点击键帽修改；录制中按 Delete 可清空（该功能将不再有全局热键）",
+                    FontSize = 11,
+                    Foreground = new System.Windows.Media.SolidColorBrush(
+                        System.Windows.Media.Color.FromRgb(0x88, 0x88, 0x88)),
+                    TextWrapping = System.Windows.TextWrapping.Wrap,
+                    Margin = new Thickness(0, 10, 0, 0),
+                });
             }
         }
         
@@ -278,10 +316,23 @@ namespace WinKit.Common
         
         private void StartHotkeyRecording(int index, Border cap)
         {
-            // 取消之前的录制
+            // 已经有一条在录制时，只把上一个键帽的显示还原，不通知 App ——
+            // 热键本来就处于挂起状态，没必要先恢复再挂起地抖一次。
             if (_recordingIndex >= 0 && _recordingCap != null)
-                CancelRecording();
-        
+            {
+                int prev = _recordingIndex;
+                ApplyCapAppearance(_recordingCap, prev, HotkeyCatalog.All[prev].Get(_settingsManager.Settings));
+                _recordingIndex = -1;
+                _recordingCap = null;
+                _recordingModifiers = 0;
+            }
+            else
+            {
+                // 只在真正进入录制时挂起全局热键。顺序不能反 ——
+                // 否则第一个按下的组合若正好是当前生效的热键，仍会被系统发给注册者。
+                HotkeyRecordingChanged?.Invoke(this, true);
+            }
+
             _recordingIndex = index;
             _recordingCap = cap;
             _recordingModifiers = 0;
@@ -292,53 +343,142 @@ namespace WinKit.Common
             cap.BorderBrush = new System.Windows.Media.SolidColorBrush(
                 System.Windows.Media.Color.FromRgb(0x00, 0x78, 0xD4));
             cap.BorderThickness = new Thickness(1);
-            ((TextBlock)cap.Child).Text = "按下新快捷键…";
-            ((TextBlock)cap.Child).Foreground = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(0x00, 0x78, 0xD4));
+            SetCapText(cap, "按下新快捷键…", 0x00, 0x78, 0xD4);
         
-            Focus();
+            cap.ToolTip = "按 Esc 取消；按 Delete 清空此快捷键；组合需至少含 Ctrl / Alt / Shift / Win 之一";
+
+            // Focus() 只给窗口设逻辑焦点，键盘输入未必落在本窗；
+            // 必须 Activate + Keyboard.Focus 才能确保收到按键。
+            Activate();
+            System.Windows.Input.Keyboard.Focus(this);
         }
         
+        /// <summary>取消录制：恢复键帽外观，并让 App 层把全局热键装回去</summary>
         private void CancelRecording()
         {
             if (_recordingIndex < 0 || _recordingCap == null) return;
-            // 恢复显示
-            var s = _settingsManager.Settings;
-            var config = GetHotkeyConfigByIndex(s, _recordingIndex);
-            ((TextBlock)_recordingCap.Child).Text = HotkeyConfig.Format(config.VK, config.Modifiers);
-            ((TextBlock)_recordingCap.Child).Foreground = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromRgb(0x44, 0x44, 0x44));
-            _recordingCap.Background = new System.Windows.Media.SolidColorBrush(
-                System.Windows.Media.Color.FromArgb(0x14, 0, 0, 0));
-            _recordingCap.BorderBrush = null;
-            _recordingCap.BorderThickness = new Thickness(0);
+
+            int index = _recordingIndex;
+            var cap = _recordingCap;
+
+            EndHotkeyRecording();
+            ApplyCapAppearance(cap, index, HotkeyCatalog.All[index].Get(_settingsManager.Settings));
+        }
+        
+        /// <summary>结束录制状态并通知 App 层恢复全局热键（提交与取消共用）</summary>
+        private void EndHotkeyRecording()
+        {
+            bool wasRecording = _recordingIndex >= 0;
+
             _recordingIndex = -1;
             _recordingCap = null;
+            _recordingModifiers = 0;
+
+            // 恢复热键时读的是当前配置 —— 提交路径已先把新组合写回配置，因此装回去的就是新键
+            if (wasRecording) HotkeyRecordingChanged?.Invoke(this, false);
         }
-        
-        private static HotkeyConfig GetHotkeyConfigByIndex(AppSettings s, int index)
+
+        /// <summary>设置窗是否正处在快捷键录制状态（App 层据此把钩子截获的按键转进来）</summary>
+        public bool IsRecordingHotkey => _recordingIndex >= 0;
+
+        /// <summary>
+        /// 从外部喂入一次按键组合并提交 —— 专供**钩子型热键**的录制使用。
+        ///
+        /// 为什么需要这条通道：含 Win 键的组合（Win+V 等）会被系统抢先处理，
+        /// 根本到不了 WPF 的键盘事件，设置窗永远录不到；而全局钩子在系统之前就看到了这个键。
+        /// 录制期间让钩子把 (VK, Modifiers) 原样转进来，用户才能把唤出键改回 Win 组合，
+        /// 或给别的功能分配一个 Win 组合。
+        /// </summary>
+        public void FeedHotkeyInput(int vk, int modifiers)
         {
-            return index switch
-            {
-                0 => s.HotkeyScreenshotTranslate,
-                1 => s.HotkeySelectionTranslate,
-                2 => s.HotkeyOcrOnly,
-                3 => s.HotkeySilentOcr,
-                4 => s.HotkeyScreenshot,
-                _ => new HotkeyConfig(),
-            };
+            if (_recordingIndex < 0 || vk == 0 || modifiers == 0) return;
+            CommitHotkey(vk, modifiers);
         }
-        
-        private void SetHotkeyConfigByIndex(AppSettings s, int index, HotkeyConfig config)
+
+        /// <summary>
+        /// 提交录制出的组合：查重 → 写配置 → 结束录制 → 落盘 → 重建清单。
+        /// 键盘事件（OnPreviewKeyDown）与钩子转发（FeedHotkeyInput）两条路共用此实现。
+        /// </summary>
+        private void CommitHotkey(int vk, int modifiers)
         {
-            switch (index)
+            if (_recordingIndex < 0) return;
+
+            // 冲突检测：与清单里其它热键逐条比对（含截图页与剪贴板页那两条）。
+            // 旧版循环写死 i < 4，截图热键被漏检，会出现两个动作抢同一组合。
+            var s = _settingsManager.Settings;
+            int dup = HotkeyCatalog.FindDuplicate(s, _recordingIndex, vk, modifiers);
+            if (dup >= 0)
             {
-                case 0: s.HotkeyScreenshotTranslate = config; break;
-                case 1: s.HotkeySelectionTranslate = config; break;
-                case 2: s.HotkeyOcrOnly = config; break;
-                case 3: s.HotkeySilentOcr = config; break;
-                case 4: s.HotkeyScreenshot = config; break;
+                // 模态提示会短暂夺焦，用豁免标志挡一下，别让它顺手把录制取消掉
+                _suppressDeactivateCancel = true;
+                try
+                {
+                    System.Windows.MessageBox.Show(
+                        $"该组合已被「{HotkeyCatalog.All[dup].Label}」占用，请换一个。",
+                        "快捷键冲突",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
+                finally { _suppressDeactivateCancel = false; }
+
+                // 保持录制状态：用户可以直接改按别的组合，不必重新点一次键帽
+                _recordingModifiers = 0;
+                if (_recordingCap != null) SetCapText(_recordingCap, "按下新快捷键…", 0x00, 0x78, 0xD4);
+                return;
             }
+
+            // 保存新快捷键
+            var config = new HotkeyConfig(vk, modifiers);
+            int edited = _recordingIndex;
+            HotkeyCatalog.All[edited].Set(s, config);
+
+            // 顺序要紧：先结束录制（此时 App 会按刚写入的新配置把热键装回去），
+            // 再落盘。Save 触发的 SettingsChanged 里模块会发现自己已按新键注册过，
+            // 于是不会多来一次注销 / 注册。
+            EndHotkeyRecording();
+            Save();
+
+            // 整表重建：改了 A 之后其它行的「重复标红」状态也要跟着刷新
+            BuildHotkeyList();
+        }
+
+        /// <summary>统一改键帽文字与颜色（避免各处强转 TextBlock）</summary>
+        private static void SetCapText(Border cap, string text, byte r, byte g, byte b)
+        {
+            if (cap.Child is not TextBlock tb) return;
+            tb.Text = text;
+            tb.Foreground = new System.Windows.Media.SolidColorBrush(
+                System.Windows.Media.Color.FromRgb(r, g, b));
+        }
+
+        /// <summary>
+        /// 按「非录制态」刷新键帽外观。三种状态用不同颜色区分：
+        /// 正常（深灰）/ 未设置（浅灰，用户主动清空）/ 与其它热键撞车（红）。
+        /// </summary>
+        private void ApplyCapAppearance(Border cap, int index, HotkeyConfig config)
+        {
+            bool unset = config.VK == 0;
+            int dup = unset
+                ? -1 // 空值不参与查重（FindDuplicate 内部也有同样保护，这里省一次遍历）
+                : HotkeyCatalog.FindDuplicate(_settingsManager.Settings, index, config.VK, config.Modifiers);
+
+            byte r, g, b;
+            if (dup >= 0) { r = 0xD0; g = 0x30; b = 0x2F; }      // 冲突：红
+            else if (unset) { r = 0x99; g = 0x99; b = 0x99; }    // 未设置：浅灰
+            else { r = 0x44; g = 0x44; b = 0x44; }               // 正常：深灰
+
+            SetCapText(cap, HotkeyConfig.Format(config.VK, config.Modifiers), r, g, b);
+
+            cap.Background = new System.Windows.Media.SolidColorBrush(dup >= 0
+                ? System.Windows.Media.Color.FromArgb(0x1F, 0xD0, 0x30, 0x2F)
+                : System.Windows.Media.Color.FromArgb(0x14, 0, 0, 0));
+            cap.BorderBrush = null;
+            cap.BorderThickness = new Thickness(0);
+            cap.ToolTip = dup >= 0
+                ? $"与「{HotkeyCatalog.All[dup].Label}」重复，两者只能生效一个，点击修改"
+                : unset
+                    ? "未设置快捷键，点击可设置；该功能当前没有全局热键"
+                    : "点击修改快捷键";
         }
         
         /// <summary>录制模式下的按键处理：捕获修饰键 + 主键组合</summary>
@@ -354,6 +494,17 @@ namespace WinKit.Common
                 if (key == Key.Escape)
                 {
                     CancelRecording();
+                    e.Handled = true;
+                    return;
+                }
+
+                // Delete / Backspace 清空这条快捷键。
+                // 「未设置」必须是可达的合法状态 —— 有些功能用户并不想占用全局组合
+                // （截图只从托盘进、某个翻译链路不常用等），旧版录制流程要求
+                // 「修饰键 + 主键」才提交，等于把留空这条路彻底堵死。
+                if (key == Key.Delete || key == Key.Back)
+                {
+                    CommitHotkey(0, 0);
                     e.Handled = true;
                     return;
                 }
@@ -374,7 +525,7 @@ namespace WinKit.Common
                         if ((_recordingModifiers & 4) != 0) parts.Add("Ctrl");
                         if ((_recordingModifiers & 1) != 0) parts.Add("Alt");
                         if ((_recordingModifiers & 2) != 0) parts.Add("Shift");
-                        ((TextBlock)_recordingCap.Child).Text = string.Join(" + ", parts) + " + …";
+                        SetCapText(_recordingCap, string.Join(" + ", parts) + " + …", 0x00, 0x78, 0xD4);
                     }
                     e.Handled = true;
                     return;
@@ -383,37 +534,18 @@ namespace WinKit.Common
                 // 主键 + 修饰键 → 提交
                 if (_recordingModifiers != 0)
                 {
-                    int vk = System.Windows.Input.KeyInterop.VirtualKeyFromKey(key);
-        
-                    // 冲突检测：检查是否与其他快捷键重复
-                    var s = _settingsManager.Settings;
-                    for (int i = 0; i < 4; i++)
-                    {
-                        if (i == _recordingIndex) continue;
-                        var other = GetHotkeyConfigByIndex(s, i);
-                        if (other.VK == vk && other.Modifiers == _recordingModifiers)
-                        {
-                            System.Windows.MessageBox.Show(
-                                $"该快捷键已被「{HotkeyLabels[i]}」使用，请选择其他组合。",
-                                "快捷键冲突",
-                                MessageBoxButton.OK,
-                                MessageBoxImage.Warning);
-                            CancelRecording();
-                            e.Handled = true;
-                            return;
-                        }
-                    }
-        
-                    // 保存新快捷键
-                    var config = new HotkeyConfig(vk, _recordingModifiers);
-                    SetHotkeyConfigByIndex(s, _recordingIndex, config);
-                    BuildHotkeyList();
-                    Save();
+                    CommitHotkey(System.Windows.Input.KeyInterop.VirtualKeyFromKey(key), _recordingModifiers);
                     e.Handled = true;
                     return;
                 }
         
-                // 没有修饰键，忽略
+                // 只按了主键、没搭修饰键：给明确提示。
+                // 旧版在这里静默忽略，用户按了单键没反应，会以为「快捷键根本改不了」。
+                if (_recordingCap != null)
+                {
+                    SetCapText(_recordingCap, "需搭配 Ctrl / Alt / Win", 0xD0, 0x30, 0x2F);
+                    _recordingModifiers = 0; // 复位，等用户重新按完整组合
+                }
                 e.Handled = true;
                 return;
             }
@@ -448,11 +580,13 @@ namespace WinKit.Common
             PageGeneral.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
             PageTodo.Visibility = index == 1 ? Visibility.Visible : Visibility.Collapsed;
             PageClipboard.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
-            PageTranslate.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
-            PageAbout.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
+            PageCapture.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
+            PageTranslate.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
+            PageAbout.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
 
             if (index == 2) UpdateClipCount();
-            if (index == 4) RefreshOcrStatus();
+            if (index == 4) RefreshOcrHistory();   // 识别历史按需重建，避免每次改设置都全量查询
+            if (index == 5) RefreshOcrStatus();
         }
 
         private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -544,6 +678,7 @@ namespace WinKit.Common
             Save();
             CurrentApp?.ToggleClipboardFeature(enable);
             ClipDetailCard.IsEnabled = enable;
+            ClipHotkeyCard.IsEnabled = enable;
         }
 
         private void ClipDedupToggle_Click(object sender, RoutedEventArgs e)
@@ -585,7 +720,25 @@ namespace WinKit.Common
         }
 
         // ══════════════════════════════════════════════
-        //  ③ 翻译与 OCR
+        //  ④ 截图
+        // ══════════════════════════════════════════════
+
+        private void CaptureAutoCopyToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.CaptureAutoCopy = CaptureAutoCopyToggle.IsChecked == true;
+            Save();
+        }
+
+        private void CaptureOpenEditorToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.CaptureOpenEditor = CaptureOpenEditorToggle.IsChecked == true;
+            Save();
+        }
+
+        // ══════════════════════════════════════════════
+        //  ⑤ 翻译与 OCR
         // ══════════════════════════════════════════════
 
         private void TranslateToggle_Click(object sender, RoutedEventArgs e)
@@ -598,9 +751,7 @@ namespace WinKit.Common
             TranslateCard.IsEnabled = enable;
             OcrCard.IsEnabled = enable;
             OpenAICard.IsEnabled = enable;
-            BaiduCard.IsEnabled = enable;
             SyncOpenAICard(enable);
-            SyncBaiduCard(enable);
         }
 
         private void ProviderCombo_Changed(object sender, SelectionChangedEventArgs e)
@@ -632,16 +783,9 @@ namespace WinKit.Common
                 OpenAIBaseUrlBox.Text = s.OpenAIBaseUrl;
                 OpenAIModelBox.Text = s.OpenAIModel;
             }
-            else if (tag == "baidu")
-            {
-                // 引导用户填写 APP ID
-                BaiduAppIdBox.Focus();
-            }
-
             Save();
             bool enabled = TranslateToggle.IsChecked == true;
             SyncOpenAICard(enabled);
-            SyncBaiduCard(enabled);
         }
 
         private void OpenAIApiKeyBox_TextChanged(object sender, TextChangedEventArgs e)
@@ -672,34 +816,12 @@ namespace WinKit.Common
             Save();
         }
 
-        private void BaiduAppIdBox_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.BaiduAppId = BaiduAppIdBox.Text ?? "";
-            Save();
-        }
-
-        private void BaiduApiKeyBox_TextChanged(object sender, TextChangedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.BaiduApiKey = BaiduApiKeyBox.Text ?? "";
-            Save();
-        }
-
         /// <summary>引擎为国内大模型 / 通用 OpenAI 时显示配置卡片；同时受「翻译模块开关」约束</summary>
         private void SyncOpenAICard(bool moduleEnabled)
         {
             bool isLLM = SelectedTag(ProviderCombo) is "openai" or "deepseek";
             OpenAICard.Visibility = (isLLM && moduleEnabled) ? Visibility.Visible : Visibility.Collapsed;
             OpenAICard.IsEnabled = moduleEnabled;
-        }
-
-        /// <summary>引擎为百度翻译时显示配置卡片；同时受「翻译模块开关」约束</summary>
-        private void SyncBaiduCard(bool moduleEnabled)
-        {
-            bool isBaidu = SelectedTag(ProviderCombo) == "baidu";
-            BaiduCard.Visibility = (isBaidu && moduleEnabled) ? Visibility.Visible : Visibility.Collapsed;
-            BaiduCard.IsEnabled = moduleEnabled;
         }
 
         private void TargetLangCombo_Changed(object sender, SelectionChangedEventArgs e)
@@ -745,6 +867,14 @@ namespace WinKit.Common
             Save();
         }
 
+        private void InvertDarkToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            // 属预处理参数，不触发引擎重建（OcrEngineOptions.SameEngineConfig 已排除）
+            _settingsManager.Settings.OcrAutoInvertDark = InvertDarkToggle.IsChecked == true;
+            Save();
+        }
+
         private void MkldnnToggle_Click(object sender, RoutedEventArgs e)
         {
             if (_suspend) return;
@@ -786,8 +916,186 @@ namespace WinKit.Common
         }
 
         // ══════════════════════════════════════════════
-        //  ④ 关于
+        //  ⑥ 关于
         // ══════════════════════════════════════════════
+
+        // ── 识别历史 ────────────────────────────────────
+
+        /// <summary>设置窗最多铺多少条历史。超出部分仍在库里，只是不把界面撑爆</summary>
+        private const int HistoryPreviewLimit = 20;
+
+        /// <summary>重建识别历史列表</summary>
+        private void RefreshOcrHistory()
+        {
+            if (OcrHistoryPanel == null) return;
+
+            OcrHistoryPanel.Children.Clear();
+
+            var store = CurrentApp?.TranslateModule?.History;
+            if (store == null || !store.IsAvailable)
+            {
+                OcrHistoryCountText.Text = "识别历史不可用";
+                OcrHistoryClearBtn.IsEnabled = false;
+                return;
+            }
+
+            int total = store.Count();
+            OcrHistoryClearBtn.IsEnabled = total > 0;
+            OcrHistoryCountText.Text = total == 0
+                ? "暂无记录 · 识别成功后自动记录"
+                : (total > HistoryPreviewLimit
+                    ? $"共 {total} 条，显示最近 {HistoryPreviewLimit} 条"
+                    : $"共 {total} 条");
+
+            if (total == 0) return;
+
+            var items = store.Query(HistoryPreviewLimit);
+            for (int i = 0; i < items.Count; i++)
+            {
+                if (i > 0)
+                {
+                    OcrHistoryPanel.Children.Add(new Border
+                    {
+                        Height = 1,
+                        Background = new System.Windows.Media.SolidColorBrush(
+                            System.Windows.Media.Color.FromArgb(0x0F, 0, 0, 0)),
+                        Margin = new Thickness(0, 6, 0, 6),
+                    });
+                }
+
+                OcrHistoryPanel.Children.Add(BuildHistoryRow(items[i]));
+            }
+        }
+
+        /// <summary>构建一行历史：时间 + 摘要/元信息 + 复制 / 删除</summary>
+        private UIElement BuildHistoryRow(OcrHistoryItem item)
+        {
+            var grid = new Grid();
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            grid.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+
+            var time = new TextBlock
+            {
+                Text = item.TimeText,
+                FontSize = 12,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(0, 0, 12, 0),
+                Foreground = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x88, 0x88, 0x88)),
+            };
+            Grid.SetColumn(time, 0);
+
+            var body = new StackPanel { VerticalAlignment = VerticalAlignment.Center, Margin = new Thickness(0, 0, 12, 0) };
+            body.Children.Add(new TextBlock
+            {
+                Text = item.Preview,
+                FontSize = 13,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                ToolTip = item.Text,
+                Foreground = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x22, 0x22, 0x22)),
+            });
+            body.Children.Add(new TextBlock
+            {
+                Text = item.MetaText,
+                FontSize = 11,
+                Margin = new Thickness(0, 2, 0, 0),
+                Foreground = new System.Windows.Media.SolidColorBrush(
+                    System.Windows.Media.Color.FromRgb(0x99, 0x99, 0x99)),
+            });
+            Grid.SetColumn(body, 1);
+
+            var actions = new StackPanel
+            {
+                Orientation = Orientation.Horizontal,
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+
+            var copyBtn = new Button
+            {
+                Content = "复制",
+                Style = (Style)FindResource("MinorBtn"),
+                Margin = new Thickness(0, 0, 6, 0),
+            };
+            string textToCopy = item.Text;
+            copyBtn.Click += (s, e) =>
+            {
+                try
+                {
+                    System.Windows.Clipboard.SetText(textToCopy);
+                    // 就地给个短反馈：按钮文字闪一下「已复制」，无需额外的状态栏
+                    copyBtn.Content = "已复制";
+                    var timer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1.2) };
+                    timer.Tick += (s2, e2) =>
+                    {
+                        timer.Stop();
+                        copyBtn.Content = "复制";
+                    };
+                    timer.Start();
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"复制识别历史失败: {ex.Message}");
+                    copyBtn.Content = "失败";
+                }
+            };
+
+            var delBtn = new Button
+            {
+                Content = "删除",
+                Style = (Style)FindResource("MinorBtn"),
+            };
+            string id = item.Id;
+            delBtn.Click += (s, e) =>
+            {
+                CurrentApp?.TranslateModule?.History.Remove(id);
+                RefreshOcrHistory();
+            };
+
+            actions.Children.Add(copyBtn);
+            actions.Children.Add(delBtn);
+            Grid.SetColumn(actions, 2);
+
+            grid.Children.Add(time);
+            grid.Children.Add(body);
+            grid.Children.Add(actions);
+
+            return grid;
+        }
+
+        private void OcrHistoryMaxBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            int value = CommitNumber(OcrHistoryMaxBox, _settingsManager.Settings.OcrHistoryMaxItems, 10, 1000);
+            if (value == _settingsManager.Settings.OcrHistoryMaxItems) return;
+
+            _settingsManager.Settings.OcrHistoryMaxItems = value;
+            Save();
+
+            // 调小上限后立即裁剪，而不是等下一次识别触发
+            CurrentApp?.TranslateModule?.History.TrimTo(value);
+            RefreshOcrHistory();
+        }
+
+        private void OcrHistoryClear_Click(object sender, RoutedEventArgs e)
+        {
+            var store = CurrentApp?.TranslateModule?.History;
+            if (store == null) return;
+
+            int count = store.Count();
+            if (count == 0) return;
+
+            var answer = System.Windows.MessageBox.Show(
+                $"确定清空全部 {count} 条识别历史？此操作不可撤销。",
+                "清空识别历史",
+                MessageBoxButton.YesNo,
+                MessageBoxImage.Warning);
+            if (answer != MessageBoxResult.Yes) return;
+
+            store.Clear();
+            RefreshOcrHistory();
+        }
 
         private void RefreshOcrStatus_Click(object sender, RoutedEventArgs e) => RefreshOcrStatus();
 
@@ -825,7 +1133,7 @@ namespace WinKit.Common
         {
             try
             {
-                Process.Start(new ProcessStartInfo("https://github.com/worldoi/WinKit") { UseShellExecute = true });
+                Process.Start(new ProcessStartInfo("https://github.com/oishijie/WinKit") { UseShellExecute = true });
             }
             catch (Exception ex)
             {

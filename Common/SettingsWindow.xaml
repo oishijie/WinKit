@@ -457,6 +457,7 @@
                         <ListBoxItem Content="通用"/>
                         <ListBoxItem Content="待办"/>
                         <ListBoxItem Content="剪贴板"/>
+                        <ListBoxItem Content="截图"/>
                         <ListBoxItem Content="翻译与 OCR"/>
                         <ListBoxItem Content="关于"/>
                     </ListBox>
@@ -578,10 +579,15 @@
                                               Click="TodoPassthroughToggle_Click"/>
                                 </Grid>
                             </Border>
+
+                            <TextBlock Text="快捷键" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel x:Name="TodoHotkeyPanel" Margin="0,10"/>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
 
-                    <!-- ────────── ② 剪贴板 ────────── -->
+                    <!-- ────────── ③ 剪贴板 ────────── -->
                     <ScrollViewer x:Name="PageClipboard"
                                   Style="{StaticResource NarrowScrollViewer}"
                                   Padding="24,18,18,18"
@@ -597,12 +603,22 @@
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                                         <TextBlock Text="启用剪贴板监控" Style="{StaticResource RowLabel}"/>
-                                        <TextBlock Text="关闭后不再记录历史，Win+V 面板同时停用" Style="{StaticResource RowHint}"/>
+                                        <TextBlock Text="关闭后不再记录历史，唤出热键同时停用" Style="{StaticResource RowHint}"/>
                                     </StackPanel>
                                     <CheckBox x:Name="ClipMonitorToggle" Grid.Column="1"
                                               Style="{StaticResource ToggleSwitch}"
                                               Click="ClipMonitorToggle_Click"/>
                                 </Grid>
+                            </Border>
+
+                            <TextBlock Text="唤出热键" Style="{StaticResource GroupTitle}"/>
+                            <Border x:Name="ClipHotkeyCard" Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <StackPanel x:Name="ClipboardHotkeyPanel" Margin="0,10"/>
+                                    <Border Height="1" Background="#0F000000"/>
+                                    <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,10,0,10"
+                                               Text="此键由 WinKit 独占：按下后系统自带的剪贴板面板不再弹出。默认 Win+V 是系统保留组合，改成普通组合（如 Ctrl+Alt+V）或直接清空，都会把 Win+V 归还给系统。"/>
+                                </StackPanel>
                             </Border>
 
                             <TextBlock Text="历史记录" Style="{StaticResource GroupTitle}"/>
@@ -657,26 +673,60 @@
                                     </Grid>
                                 </StackPanel>
                             </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- ────────── ④ 截图 ────────── -->
+                    <ScrollViewer x:Name="PageCapture"
+                                  Style="{StaticResource NarrowScrollViewer}"
+                                  Padding="24,18,18,18"
+                                  Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="截图" Style="{StaticResource PageTitle}"/>
 
                             <TextBlock Text="快捷键" Style="{StaticResource GroupTitle}"/>
                             <Border Style="{StaticResource Card}">
-                                <Grid Margin="0,12">
-                                    <Grid.ColumnDefinitions>
-                                        <ColumnDefinition Width="*"/>
-                                        <ColumnDefinition Width="Auto"/>
-                                    </Grid.ColumnDefinitions>
-                                    <TextBlock Grid.Column="0" Text="呼出剪贴板历史面板"
-                                               Style="{StaticResource RowLabel}" VerticalAlignment="Center"/>
-                                    <Border Grid.Column="1" Style="{StaticResource KeyCap}">
-                                        <TextBlock Text="Win + V" FontSize="11" Foreground="#444"
-                                                   FontFamily="Consolas, Segoe UI"/>
-                                    </Border>
-                                </Grid>
+                                <StackPanel x:Name="CaptureHotkeyPanel" Margin="0,10"/>
+                            </Border>
+
+                            <TextBlock Text="截图后行为" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="自动复制原图" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="框选完成即把原图写入系统剪贴板；编辑器内仍可再次复制标注结果" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="CaptureAutoCopyToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="CaptureAutoCopyToggle_Click"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="打开标注编辑器" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="关闭后只取图复制，不做标注；与上一项同时关闭时会强制复制一次" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="CaptureOpenEditorToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="CaptureOpenEditorToggle_Click"/>
+                                    </Grid>
+                                </StackPanel>
                             </Border>
                         </StackPanel>
                     </ScrollViewer>
 
-                    <!-- ────────── ③ 翻译与 OCR ────────── -->
+                    <!-- ────────── ⑤ 翻译与 OCR ────────── -->
                     <ScrollViewer x:Name="PageTranslate"
                                   Style="{StaticResource NarrowScrollViewer}"
                                   Padding="24,18,18,18"
@@ -710,13 +760,12 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                                             <TextBlock Text="翻译引擎" Style="{StaticResource RowLabel}"/>
-                                            <TextBlock Text="默认国内大模型（DeepSeek 等）直连；百度翻译需 APP ID+密钥；Google 需代理" Style="{StaticResource RowHint}"/>
+                                            <TextBlock Text="默认国内大模型（DeepSeek 等）直连；Google 翻译需代理" Style="{StaticResource RowHint}"/>
                                         </StackPanel>
                                         <ComboBox x:Name="ProviderCombo" Grid.Column="1"
                                                   Style="{StaticResource SettingsCombo}"
                                                   SelectionChanged="ProviderCombo_Changed">
                                             <ComboBoxItem Content="国内大模型 (DeepSeek 等)" Tag="deepseek"/>
-                                            <ComboBoxItem Content="百度翻译" Tag="baidu"/>
                                             <ComboBoxItem Content="通用 OpenAI 兼容" Tag="openai"/>
                                             <ComboBoxItem Content="Google 翻译 (需代理)" Tag="google"/>
                                         </ComboBox>
@@ -862,41 +911,6 @@
                                 </StackPanel>
                             </Border>
 
-                            <TextBlock Text="百度翻译" Style="{StaticResource GroupTitle}"/>
-                            <Border x:Name="BaiduCard" Style="{StaticResource Card}" Visibility="Collapsed">
-                                <StackPanel>
-                                    <Grid Margin="0,10">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
-                                            <TextBlock Text="APP ID" Style="{StaticResource RowLabel}"/>
-                                            <TextBlock Text="百度翻译开放平台「通用文本翻译」的 APP ID" Style="{StaticResource RowHint}"/>
-                                        </StackPanel>
-                                        <TextBox x:Name="BaiduAppIdBox" Grid.Column="1"
-                                                 Style="{StaticResource FieldBox}"
-                                                 TextChanged="BaiduAppIdBox_TextChanged"/>
-                                    </Grid>
-
-                                    <Border Height="1" Background="#0F000000"/>
-
-                                    <Grid Margin="0,10">
-                                        <Grid.ColumnDefinitions>
-                                            <ColumnDefinition Width="*"/>
-                                            <ColumnDefinition Width="Auto"/>
-                                        </Grid.ColumnDefinitions>
-                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
-                                            <TextBlock Text="密钥 SecretKey" Style="{StaticResource RowLabel}"/>
-                                            <TextBlock Text="明文保存在本地配置（DPAPI 加密），仅百度引擎下使用" Style="{StaticResource RowHint}"/>
-                                        </StackPanel>
-                                        <TextBox x:Name="BaiduApiKeyBox" Grid.Column="1"
-                                                 Style="{StaticResource FieldBox}"
-                                                 TextChanged="BaiduApiKeyBox_TextChanged"/>
-                                    </Grid>
-                                </StackPanel>
-                            </Border>
-
                             <TextBlock Text="本地 OCR 引擎" Style="{StaticResource GroupTitle}"/>
                             <Border x:Name="OcrCard" Style="{StaticResource Card}">
                                 <StackPanel>
@@ -928,6 +942,22 @@
                                         <CheckBox x:Name="AngleClsToggle" Grid.Column="1"
                                                   Style="{StaticResource ToggleSwitch}"
                                                   Click="AngleClsToggle_Click"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="深色截图自动反色" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="识别头按白底黑字训练；检测到深色背景时先反色，改善暗色终端 / IDE 截图识别率" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="InvertDarkToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="InvertDarkToggle_Click"/>
                                     </Grid>
 
                                     <Border Height="1" Background="#0F000000"/>
@@ -1004,6 +1034,45 @@
                                 </StackPanel>
                             </Border>
 
+                            <TextBlock Text="识别历史" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="保留条数" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="10 – 1000，超出后自动淘汰最旧的记录" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="OcrHistoryMaxBox" Grid.Column="1"
+                                                 Style="{StaticResource NumBox}"
+                                                 PreviewTextInput="NumberOnly_PreviewTextInput"
+                                                 LostFocus="OcrHistoryMaxBox_Commit"
+                                                 KeyDown="NumBox_KeyDown"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <StackPanel x:Name="OcrHistoryPanel" Margin="0,10,0,6"/>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <TextBlock x:Name="OcrHistoryCountText" Grid.Column="0"
+                                                   VerticalAlignment="Center" Style="{StaticResource RowHint}"/>
+                                        <Button x:Name="OcrHistoryClearBtn" Grid.Column="1" Content="清空"
+                                                Style="{StaticResource MinorBtn}"
+                                                Click="OcrHistoryClear_Click"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
                             <TextBlock Text="快捷键" Style="{StaticResource GroupTitle}"/>
                             <Border Style="{StaticResource Card}">
                                 <StackPanel x:Name="HotkeyPanel" Margin="0,10"/>
@@ -1011,7 +1080,7 @@
                         </StackPanel>
                     </ScrollViewer>
 
-                    <!-- ────────── ④ 关于 ────────── -->
+                    <!-- ────────── ⑥ 关于 ────────── -->
                     <ScrollViewer x:Name="PageAbout"
                                   Style="{StaticResource NarrowScrollViewer}"
                                   Padding="24,18,18,18"
@@ -1039,14 +1108,14 @@
                                 <StackPanel>
                                     <Grid Margin="0,10">
                                         <TextBlock Text="作者" Style="{StaticResource RowLabel}" HorizontalAlignment="Left"/>
-                                        <TextBlock Text="worldoi" FontSize="13" Foreground="#444"
+                                        <TextBlock Text="oishijie" FontSize="13" Foreground="#444"
                                                    HorizontalAlignment="Right" VerticalAlignment="Center"/>
                                     </Grid>
                                     <Border Height="1" Background="#0F000000"/>
                                     <Grid Margin="0,10">
                                         <TextBlock Text="项目地址" Style="{StaticResource RowLabel}" HorizontalAlignment="Left"/>
                                         <TextBlock x:Name="LinkText"
-                                                   Text="github.com/worldoi/WinKit"
+                                                   Text="github.com/oishijie/WinKit"
                                                    FontSize="13" Foreground="#0066CC"
                                                    Cursor="Hand" TextDecorations="Underline"
                                                    HorizontalAlignment="Right" VerticalAlignment="Center"
@@ -1099,7 +1168,7 @@
                                 </StackPanel>
                             </Border>
 
-                            <TextBlock Text="© 2026 worldoi. All Rights Reserved."
+                            <TextBlock Text="© 2026 oishijie. All Rights Reserved."
                                        HorizontalAlignment="Center"
                                        Margin="0,4,0,10"
                                        FontSize="10" Foreground="#A0A0A0"/>

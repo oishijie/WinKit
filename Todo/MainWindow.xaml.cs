@@ -47,8 +47,6 @@ namespace WinKit.Todo
         private bool _isPassThrough = false;
         private System.Windows.Threading.DispatcherTimer? _passThroughTimer;
 
-        // 托盘引用（用于同步状态）
-        private TrayHelper? _tray;
         // 设置中心窗口引用（标题栏齿轮按钮打开）
         private SettingsWindow? _settingsWindow;
         public bool IsPinned      => _isPinned;
@@ -64,7 +62,6 @@ namespace WinKit.Todo
                 }
             }
         }
-        public void SetTray(TrayHelper tray) => _tray = tray;
         public void SetSettingsWindow(SettingsWindow win) => _settingsWindow = win;
 
         private const int WM_MOVING = 0x0216;
@@ -242,12 +239,6 @@ namespace WinKit.Todo
         private void PinBtn_Click(object sender, RoutedEventArgs e)
         {
             TogglePinState();
-            _tray?.SyncPinMenuItem();
-        }
-
-        internal void TogglePinFromTray()
-        {
-            TogglePinState();
         }
 
         private void TogglePinState() => ApplyPinState(!_isPinned);
@@ -278,12 +269,6 @@ namespace WinKit.Todo
         // 鼠标穿透控制逻辑
         // ══════════════════════════════════════════════
         private void PassThroughBtn_Click(object sender, RoutedEventArgs e)
-        {
-            TogglePassThroughState();
-            _tray?.SyncPassThroughMenuItem();
-        }
-
-        internal void TogglePassThroughFromTray()
         {
             TogglePassThroughState();
         }

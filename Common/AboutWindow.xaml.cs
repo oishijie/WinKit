@@ -55,7 +55,7 @@ namespace WinKit.Common
             {
                 var psi = new ProcessStartInfo
                 {
-                    FileName = "https://github.com/worldoi/WinKit",
+                    FileName = "https://github.com/oishijie/WinKit",
                     UseShellExecute = true
                 };
                 Process.Start(psi);

@@ -68,11 +68,11 @@
                     </Grid.RowDefinitions>
 
                     <TextBlock Grid.Row="0" Grid.Column="0" Text="作者:" Foreground="#777" FontSize="12" HorizontalAlignment="Right"/>
-                    <TextBlock Grid.Row="0" Grid.Column="2" Text="worldoi" Foreground="#222" FontSize="12" FontWeight="SemiBold"/>
+                    <TextBlock Grid.Row="0" Grid.Column="2" Text="oishijie" Foreground="#222" FontSize="12" FontWeight="SemiBold"/>
 
                     <TextBlock Grid.Row="2" Grid.Column="0" Text="项目地址:" Foreground="#777" FontSize="12" HorizontalAlignment="Right"/>
                     <TextBlock Grid.Row="2" Grid.Column="2" x:Name="LinkText" 
-                               Text="github.com/worldoi/WinKit" 
+                               Text="github.com/oishijie/WinKit" 
                                Foreground="#0066CC" 
                                FontSize="12" 
                                Cursor="Hand"
@@ -87,7 +87,7 @@
 
                 <!-- 版权标语 -->
                 <StackPanel Grid.Row="2" VerticalAlignment="Center">
-                    <TextBlock Text="© 2026 worldoi. All Rights Reserved." 
+                    <TextBlock Text="© 2026 oishijie. All Rights Reserved." 
                                HorizontalAlignment="Center" 
                                FontSize="10" 
                                Foreground="#999"/>

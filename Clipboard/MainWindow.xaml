@@ -49,12 +49,6 @@
                             Opacity="1"
                             Click="PinBtn_Click"
                             ToolTip="钉住窗口"/>
-                    <Button x:Name="ScreenshotBtn"
-                            Content="📷"
-                            Style="{StaticResource TitleBarBtn}"
-                            Opacity="1"
-                            Click="ScreenshotBtn_Click"
-                            ToolTip="截图"/>
                     <Button x:Name="CloseBtn"
                             Content="✕"
                             Style="{StaticResource TitleBarBtn}"
