@@ -14,8 +14,25 @@
     <Description>统一桌面助手 (TodoList &amp; Clipboard &amp; 本地 OCR 翻译)</Description>
     <ApplicationIcon>PTD.ico</ApplicationIcon>
 
-    <!-- PaddleOCR 原生推理库仅提供 x64 版本，必须锁定 x64 进程 -->
+    <!--
+      ONNX Runtime 的原生库只提供 x64 版本，必须锁定 x64 进程。
+      （原 Paddle 方案同样只支持 x64，此项保持不变）
+    -->
     <PlatformTarget>x64</PlatformTarget>
+
+    <!--
+      ⚠ 体积关键项：锁定运行时标识符为 win-x64。
+      未设置 RID 时，NuGet 会把 Microsoft.ML.OnnxRuntime 与 SkiaSharp 里
+      **全部平台**的原生资产平铺到 runtimes\ 下 —— 含 Android 的 onnxruntime.aar、
+      iOS 的 onnxruntime.xcframework.zip、二十余个 Linux 发行版的 libSkiaSharp.so 等，
+      实测高达 378MB，而真正需要的只有 win-x64 的几十 MB。
+
+      AppendRuntimeIdentifierToOutputPath=false：保持输出目录仍是
+      bin\Release\net8.0-windows\（不追加 \win-x64\ 子目录），与原有发布流程一致。
+    -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>
+    <SelfContained>false</SelfContained>
 
     <!-- 优化发布选项 -->
     <PublishSingleFile>false</PublishSingleFile>
@@ -27,8 +44,7 @@
 
   <PropertyGroup>
     <!-- 本地 OCR 依赖版本，集中维护 -->
-    <PaddleOCRSharpVersion>6.2.0</PaddleOCRSharpVersion>
-    <PaddleRuntimeVersion>3.3.0.1</PaddleRuntimeVersion>
+    <RapidOcrNetVersion>4.2.0</RapidOcrNetVersion>
   </PropertyGroup>
 
   <ItemGroup>
@@ -50,48 +66,34 @@
     <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
 
     <!--
-      本地 OCR：PaddleOCRSharp 提供托管封装，Paddle.Runtime.win_x64 提供原生推理运行时。
-      两个包自带的 build 资产会把 ~390MB 的 DLL 与模型平铺到输出根目录，
-      这里用 ExcludeAssets="build" 屏蔽，改为下方自定义规则统一收纳到 libs\ 子目录。
+      本地 OCR：ONNX Runtime 推理（RapidOcrNet 托管封装 + Microsoft.ML.OnnxRuntime 原生运行时）。
+      相比旧的 Paddle 方案（paddle_inference + mklml + opencv_world + mkldnn ≈ 386MB），
+      原生负载降到约 13MB，配合 PP-OCRv6 的 ONNX 模型（约 37MB）即可完整离线识别。
+
+      ExcludeAssets="build"：屏蔽包自带的 build targets —— 它会把 v5 拉丁文模型（约 14MB）
+      复制到输出目录，而本项目统一使用 v6 多语言模型（见下方 models\ 规则），不需要这份冗余副本。
     -->
-    <PackageReference Include="PaddleOCRSharp" Version="$(PaddleOCRSharpVersion)" ExcludeAssets="build" />
-    <PackageReference Include="Paddle.Runtime.win_x64" Version="$(PaddleRuntimeVersion)" ExcludeAssets="build" />
+    <PackageReference Include="RapidOcrNet" Version="$(RapidOcrNetVersion)" ExcludeAssets="build" />
   </ItemGroup>
 
-  <!-- ══ 本地 OCR 运行时布局 ═══════════════════════════════════════════
-       输出目录结构（对齐 SnapFind 便携版的做法）：
+  <!-- ══ 本地 OCR 模型布局 ═══════════════════════════════════════════════
+       输出目录结构：
          WinKit.exe
-         libs\                 原生推理库 (PaddleOCR.dll / paddle_inference.dll / opencv ...)
-         libs\inference\       PP-OCR 模型与字典
-       运行期由 PaddleOcrProvider 把 EngineBase.PaddleOCRdllPath 指向 libs\。
+         models\    PP-OCRv6 ONNX 模型与字典（det / rec / cls / dict）
+       运行期由 RapidOcrProvider 从 models\ 解析模型路径。
   -->
-  <ItemGroup Condition="'$(NuGetPackageRoot)' != ''">
-    <!-- 原生推理运行时 -->
-    <None Include="$(NuGetPackageRoot)paddle.runtime.win_x64\$(PaddleRuntimeVersion)\build\win_x64\*.*"
-          Link="libs\%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest"
-          Visible="false" />
-
-    <!-- PaddleOCR.dll（PaddleOCRSharp 的原生底座） -->
-    <None Include="$(NuGetPackageRoot)paddleocrsharp\$(PaddleOCRSharpVersion)\build\ytLib\PaddleOCR.dll"
-          Link="libs\PaddleOCR.dll"
-          CopyToOutputDirectory="PreserveNewest"
-          Visible="false" />
-
-    <!-- PP-OCR 模型与字典；表格结构化模型 (SLANet) 用不到，排除以省 8MB -->
-    <None Include="$(NuGetPackageRoot)paddleocrsharp\$(PaddleOCRSharpVersion)\build\ytLib\inference\**\*.*"
-          Exclude="$(NuGetPackageRoot)paddleocrsharp\$(PaddleOCRSharpVersion)\build\ytLib\inference\SLANet_infer\**\*.*;$(NuGetPackageRoot)paddleocrsharp\$(PaddleOCRSharpVersion)\build\ytLib\inference\table_structure_dict_ch.txt;$(NuGetPackageRoot)paddleocrsharp\$(PaddleOCRSharpVersion)\build\ytLib\inference\PaddleOCRStructure.config.json"
-          Link="libs\inference\%(RecursiveDir)%(Filename)%(Extension)"
-          CopyToOutputDirectory="PreserveNewest"
-          Visible="false" />
+  <ItemGroup>
+    <None Update="models\**\*.*" CopyToOutputDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
 
-  <!-- 缺少原生运行时会导致应用启动后 OCR 完全不可用，这里在构建期直接拦截 -->
-  <Target Name="VerifyLocalOcrRuntime" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
-    <Error Condition="!Exists('$(OutDir)libs\PaddleOCR.dll')"
-           Text="本地 OCR 运行时缺失：未能生成 $(OutDir)libs\PaddleOCR.dll。请先执行 dotnet restore 以还原 PaddleOCRSharp / Paddle.Runtime.win_x64。" />
-    <Error Condition="!Exists('$(OutDir)libs\paddle_inference.dll')"
-           Text="本地 OCR 运行时缺失：未能生成 $(OutDir)libs\paddle_inference.dll。请先执行 dotnet restore 以还原 Paddle.Runtime.win_x64。" />
+  <!-- 缺少模型会导致应用启动后 OCR 完全不可用，这里在构建期直接拦截 -->
+  <Target Name="VerifyLocalOcrModels" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
+    <Error Condition="!Exists('$(OutDir)models\PP-OCRv6_det_small.onnx')"
+           Text="本地 OCR 模型缺失：未能生成 $(OutDir)models\PP-OCRv6_det_small.onnx。请确认项目 models\ 目录下存在 PP-OCRv6 的 ONNX 模型。" />
+    <Error Condition="!Exists('$(OutDir)models\PP-OCRv6_rec_small.onnx')"
+           Text="本地 OCR 模型缺失：未能生成 $(OutDir)models\PP-OCRv6_rec_small.onnx。" />
+    <Error Condition="!Exists('$(OutDir)models\PP-OCRv6_small_dict.txt')"
+           Text="本地 OCR 识别字典缺失：未能生成 $(OutDir)models\PP-OCRv6_small_dict.txt。" />
   </Target>
 
   <ItemGroup>

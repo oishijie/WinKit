@@ -72,18 +72,18 @@ namespace WinKit.Translate
 
         /// <summary>初始化失败原因（未失败为 null）</summary>
         public string? OcrInitializationError =>
-            (_ocr is PaddleOcrProvider paddle) ? paddle.InitializationError : null;
+            (_ocr is RapidOcrProvider paddle) ? paddle.InitializationError : null;
 
         /// <summary>因首选模型缺失而回退到其它模型时的提示文案（无回退为 null）</summary>
         public string? OcrFallbackNotice =>
-            (_ocr is PaddleOcrProvider paddle) ? paddle.FallbackNotice : null;
+            (_ocr is RapidOcrProvider paddle) ? paddle.FallbackNotice : null;
 
         public TranslateModule(SettingsManager settingsManager)
         {
             _settingsManager = settingsManager;
             _translatorOptions = TranslatorOptions.FromSettings(settingsManager.Settings);
             _translator = CreateTranslator(_translatorOptions);
-            _ocr = new PaddleOcrProvider(OcrEngineOptions.FromSettings(settingsManager.Settings));
+            _ocr = new RapidOcrProvider(OcrEngineOptions.FromSettings(settingsManager.Settings));
             _history = new OcrHistoryStore();
             _hotkey = new HotkeyService();
 
@@ -106,7 +106,7 @@ namespace WinKit.Translate
 
         private void OnSettingsChanged(object? sender, AppSettings settings)
         {
-            if (_ocr is PaddleOcrProvider paddle)
+            if (_ocr is RapidOcrProvider paddle)
             {
                 // Reconfigure 内部走 WaitAsync 而非同步 Wait，绝不阻塞 UI 线程；
                 // 重置完成后在后台预热新引擎，避免首次识别时冷启动等数秒。
@@ -459,7 +459,7 @@ namespace WinKit.Translate
             var text = $"{_ocr.Name} · {ocr.BlockCount} 块 · {ocr.ElapsedMs} ms";
             if (ocr.AutoInverted)
                 text += " · 已反色";
-            if (_ocr is PaddleOcrProvider p && p.FallbackNotice != null)
+            if (_ocr is RapidOcrProvider p && p.FallbackNotice != null)
                 text += $" · {p.FallbackNotice}";
             return text;
         }
@@ -619,7 +619,7 @@ namespace WinKit.Translate
         /// <summary>结果窗隐藏后立即触发 OCR 引擎瘦身（卸载原生推理实例并压缩工作集）</summary>
         private void OnResultWindowVisibilityChanged(object? sender, DependencyPropertyChangedEventArgs e)
         {
-            if (sender is ResultWindow w && !w.IsVisible && _ocr is PaddleOcrProvider paddle)
+            if (sender is ResultWindow w && !w.IsVisible && _ocr is RapidOcrProvider paddle)
                 paddle.RequestSlimNow();
         }
 

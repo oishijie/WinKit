@@ -8,57 +8,43 @@ namespace WinKit.Translate.Services
     /// <summary>可选的本地 OCR 模型组合</summary>
     public enum OcrModelKind
     {
-        /// <summary>PP-OCRv6 Small：中英混排，精度与速度均衡（默认）</summary>
+        /// <summary>PP-OCRv6 Small：多语言（简繁中文 / 英文 / 日文 + 46 种拉丁语系），精度与速度均衡（默认）</summary>
         V6Small = 0,
 
         /// <summary>PP-OCRv6 Tiny：体积最小、速度最快，适合低配机器</summary>
         V6Tiny = 1,
-
-        /// <summary>PP-OCRv5 Mobile 中英文模型</summary>
-        V5Chinese = 2,
-
-        /// <summary>PP-OCRv5 Mobile 英文/数字专用模型</summary>
-        V5English = 3,
     }
 
-    /// <summary>一套模型所需的四个路径</summary>
+    /// <summary>一套模型所需的四个路径（检测 / 方向分类 / 识别 / 字典）</summary>
     public readonly record struct OcrModelPaths(string Det, string Cls, string Rec, string Keys);
 
     /// <summary>
-    /// 本地 OCR 模型清单与运行时目录解析。
+    /// 本地 OCR 模型清单与路径解析（ONNX Runtime 版）。
     ///
-    /// 输出目录布局（构建期由 WinKit.csproj 生成，参考 SnapFind 便携版）：
+    /// 输出目录布局（构建期由 WinKit.csproj 从项目内 models\ 原样复制）：
     ///   WinKit.exe
-    ///   libs\             原生推理库
-    ///   libs\inference\   PP-OCR 模型与字典
+    ///   models\
+    ///     PP-OCRv6_det_small.onnx                          检测（Small）
+    ///     PP-OCRv6_rec_small.onnx                          识别（Small）
+    ///     PP-OCRv6_small_dict.txt                          上者对应字典
+    ///     PP-OCRv6_det_tiny.onnx                           检测（Tiny）
+    ///     PP-OCRv6_rec_tiny.onnx                           识别（Tiny）
+    ///     PP-OCRv6_tiny_dict.txt                           上者对应字典
+    ///     ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx   方向分类（v6 沿用 v5 分类器）
+    ///
+    /// 设计要点：PP-OCRv6 的 small / tiny 权重本身就是多语言的，
+    /// 因此不再需要旧版那样按「中英文 / 英文」拆分模型档位。
     /// </summary>
     public static class OcrModelCatalog
     {
-        /// <summary>原生推理库目录（PaddleOCR.dll 及其依赖）</summary>
-        public static string LibsDirectory { get; } =
-            Path.Combine(AppContext.BaseDirectory, "libs");
+        /// <summary>模型根目录</summary>
+        public static string ModelsDirectory { get; } =
+            Path.Combine(AppContext.BaseDirectory, "models");
 
-        /// <summary>模型目录</summary>
-        public static string InferenceDirectory { get; } =
-            Path.Combine(LibsDirectory, "inference");
+        private static string Dir(string name) => Path.Combine(ModelsDirectory, name);
 
-        /// <summary>中英文通用字典</summary>
-        private static string ChineseKeys => Path.Combine(InferenceDirectory, "ppocr_keys.txt");
-
-        /// <summary>英文/数字字典</summary>
-        private static string EnglishKeys => Path.Combine(InferenceDirectory, "en_dict.txt");
-
-        /// <summary>角度分类模型（四种组合共用）</summary>
-        private static string AngleClassifier => Path.Combine(InferenceDirectory, "PP-OCRv5_mobile_cls_infer");
-
-        /// <summary>校验原生运行时是否齐全时必须存在的关键文件</summary>
-        private static readonly string[] RequiredNativeFiles =
-        {
-            "PaddleOCR.dll",
-            "paddle_inference.dll",
-            "opencv_world470.dll",
-            "mkldnn.dll",
-        };
+        /// <summary>方向分类模型（两档共用；PP-OCRv6 不自带分类器，沿用 v5 的）</summary>
+        private static string AngleClassifier => Dir("ch_PP-LCNet_x0_25_textline_ori_cls_mobile.onnx");
 
         /// <summary>把配置里的字符串解析为模型枚举，无法识别时回落到默认值</summary>
         public static OcrModelKind Parse(string? name)
@@ -68,10 +54,12 @@ namespace WinKit.Translate.Services
 
             return name.Trim().ToLowerInvariant() switch
             {
-                "v6small" or "v6_small" or "small" => OcrModelKind.V6Small,
                 "v6tiny" or "v6_tiny" or "tiny" => OcrModelKind.V6Tiny,
-                "v5cn" or "v5_cn" or "v5chinese" or "chinese" => OcrModelKind.V5Chinese,
-                "v5en" or "v5_en" or "v5english" or "english" => OcrModelKind.V5English,
+
+                // 旧版配置里的 PP-OCRv5 中英文两档：v6 单模型即多语言，统一并入默认档
+                "v5cn" or "v5_cn" or "v5chinese" or "chinese" => OcrModelKind.V6Small,
+                "v5en" or "v5_en" or "v5english" or "english" => OcrModelKind.V6Small,
+
                 _ => OcrModelKind.V6Small,
             };
         }
@@ -80,8 +68,6 @@ namespace WinKit.Translate.Services
         public static string ToConfigValue(OcrModelKind kind) => kind switch
         {
             OcrModelKind.V6Tiny => "V6_Tiny",
-            OcrModelKind.V5Chinese => "V5_CN",
-            OcrModelKind.V5English => "V5_EN",
             _ => "V6_Small",
         };
 
@@ -89,76 +75,47 @@ namespace WinKit.Translate.Services
         public static string DisplayName(OcrModelKind kind) => kind switch
         {
             OcrModelKind.V6Tiny => "PP-OCRv6 Tiny",
-            OcrModelKind.V5Chinese => "PP-OCRv5 中英文",
-            OcrModelKind.V5English => "PP-OCRv5 英文",
             _ => "PP-OCRv6 Small",
         };
 
         /// <summary>解析指定模型组合的四个路径</summary>
-        public static OcrModelPaths Resolve(OcrModelKind kind)
+        public static OcrModelPaths Resolve(OcrModelKind kind) => kind switch
         {
-            string Dir(string name) => Path.Combine(InferenceDirectory, name);
+            OcrModelKind.V6Tiny => new OcrModelPaths(
+                Dir("PP-OCRv6_det_tiny.onnx"),
+                AngleClassifier,
+                Dir("PP-OCRv6_rec_tiny.onnx"),
+                Dir("PP-OCRv6_tiny_dict.txt")),
 
-            return kind switch
-            {
-                OcrModelKind.V6Tiny => new OcrModelPaths(
-                    Dir("PP-OCRv6_tiny_det_infer"),
-                    AngleClassifier,
-                    Dir("PP-OCRv6_tiny_rec_infer"),
-                    ChineseKeys),
-
-                OcrModelKind.V5Chinese => new OcrModelPaths(
-                    Dir("PP-OCRv5_mobile_det_infer"),
-                    AngleClassifier,
-                    Dir("PP-OCRv5_mobile_rec_infer"),
-                    ChineseKeys),
-
-                OcrModelKind.V5English => new OcrModelPaths(
-                    Dir("PP-OCRv5_mobile_det_infer"),
-                    AngleClassifier,
-                    Dir("en_PP-OCRv5_mobile_rec_infer"),
-                    EnglishKeys),
-
-                _ => new OcrModelPaths(
-                    Dir("PP-OCRv6_small_det_infer"),
-                    AngleClassifier,
-                    Dir("PP-OCRv6_small_rec_infer"),
-                    ChineseKeys),
-            };
-        }
+            _ => new OcrModelPaths(
+                Dir("PP-OCRv6_det_small.onnx"),
+                AngleClassifier,
+                Dir("PP-OCRv6_rec_small.onnx"),
+                Dir("PP-OCRv6_small_dict.txt")),
+        };
 
         /// <summary>
-        /// 启动前自检：原生库与模型文件是否齐备。
-        /// 失败时给出可直接照做的提示，而不是等到调用时抛出难以理解的 DllNotFoundException。
+        /// 启动前自检：模型文件是否齐备。
+        /// 失败时给出可直接照做的提示，而不是等到调用时抛出难以理解的异常。
         /// </summary>
         public static bool TryValidate(OcrModelKind kind, out string error)
         {
-            if (!Directory.Exists(LibsDirectory))
+            if (!Directory.Exists(ModelsDirectory))
             {
-                error = $"未找到本地 OCR 运行时目录：{LibsDirectory}";
-                return false;
-            }
-
-            var missingNative = RequiredNativeFiles
-                .Where(f => !File.Exists(Path.Combine(LibsDirectory, f)))
-                .ToList();
-
-            if (missingNative.Count > 0)
-            {
-                error = $"本地 OCR 原生库缺失：{string.Join("、", missingNative)}（目录 {LibsDirectory}）";
+                error = $"未找到本地 OCR 模型目录：{ModelsDirectory}";
                 return false;
             }
 
             var paths = Resolve(kind);
-            var missingModel = new List<string>();
-            if (!Directory.Exists(paths.Det)) missingModel.Add(Path.GetFileName(paths.Det));
-            if (!Directory.Exists(paths.Cls)) missingModel.Add(Path.GetFileName(paths.Cls));
-            if (!Directory.Exists(paths.Rec)) missingModel.Add(Path.GetFileName(paths.Rec));
-            if (!File.Exists(paths.Keys)) missingModel.Add(Path.GetFileName(paths.Keys));
+            var missing = new List<string>();
+            if (!File.Exists(paths.Det)) missing.Add(Path.GetFileName(paths.Det));
+            if (!File.Exists(paths.Cls)) missing.Add(Path.GetFileName(paths.Cls));
+            if (!File.Exists(paths.Rec)) missing.Add(Path.GetFileName(paths.Rec));
+            if (!File.Exists(paths.Keys)) missing.Add(Path.GetFileName(paths.Keys));
 
-            if (missingModel.Count > 0)
+            if (missing.Count > 0)
             {
-                error = $"OCR 模型缺失：{string.Join("、", missingModel)}（目录 {InferenceDirectory}）";
+                error = $"OCR 模型缺失：{string.Join("、", missing)}（目录 {ModelsDirectory}）";
                 return false;
             }
 

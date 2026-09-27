@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
-using PaddleOCRSharp;
 using WinKit.Translate.Models;
 
 namespace WinKit.Translate.Services
@@ -50,7 +49,7 @@ namespace WinKit.Translate.Services
         /// <param name="sourceHeight">传入引擎的**原图**高度，同上</param>
         /// <param name="scale">预处理时的缩放系数（原图 → 送入引擎的位图），默认 1 表示未缩放</param>
         public static OcrLayout Compose(
-            IEnumerable<TextBlock>? blocks,
+            IEnumerable<OcrTextBlock>? blocks,
             int sourceWidth = 0,
             int sourceHeight = 0,
             double scale = 1.0)
@@ -110,7 +109,7 @@ namespace WinKit.Translate.Services
 
         // ── 1. 归一化为带包围盒的片段 ────────────────────────────
 
-        private static List<Fragment> ToFragments(IEnumerable<TextBlock>? blocks)
+        private static List<Fragment> ToFragments(IEnumerable<OcrTextBlock>? blocks)
         {
             var list = new List<Fragment>();
             if (blocks == null) return list;
@@ -119,21 +118,15 @@ namespace WinKit.Translate.Services
             {
                 if (b == null || string.IsNullOrWhiteSpace(b.Text)) continue;
 
-                var points = b.BoxPoints;
-                if (points == null || points.Count == 0)
-                {
-                    // 没有坐标信息时按出现顺序单独成行，至少不会串行
-                    list.Add(new Fragment { Text = b.Text.Trim(), Left = 0, Top = list.Count * 1000, Right = 1, Bottom = list.Count * 1000 + 1 });
-                    continue;
-                }
-
+                // 引擎适配层已把各自的输出（Paddle 的 BoxPoints / ONNX 的四点框）统一折算成
+                // 矩形包围盒，这里只处理矩形，不再感知具体引擎。
                 list.Add(new Fragment
                 {
                     Text = b.Text.Trim(),
-                    Left = points.Min(p => p.X),
-                    Top = points.Min(p => p.Y),
-                    Right = points.Max(p => p.X),
-                    Bottom = points.Max(p => p.Y),
+                    Left = b.Left,
+                    Top = b.Top,
+                    Right = b.Right,
+                    Bottom = b.Bottom,
                 });
             }
 
