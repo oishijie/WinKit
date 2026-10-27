@@ -33,6 +33,9 @@ namespace WinKit.Todo
         private readonly SettingsManager _settingsManager;
         private bool _isUpdatingText = false;
 
+        /// <summary>待办回收站：删除的条目先进回收站，可在「待办历史」窗口还原</summary>
+        public RecycleBinService RecycleBinService { get; }
+
         // 拖拽排序
         private WinPoint  _dragStart;
         private TodoItem? _dragItem;
@@ -106,6 +109,7 @@ namespace WinKit.Todo
             new WindowInteropHelper(this).EnsureHandle();
 
             _storage = new MarkdownStorage();
+            RecycleBinService = new RecycleBinService(settingsManager);
             foreach (var item in _storage.LoadTodos())
                 _items.Add(item);
             TodoList.ItemsSource = _items;
@@ -452,9 +456,10 @@ namespace WinKit.Todo
 
             if (e.OriginalSource is FrameworkElement fe && fe.DataContext is TodoItem item)
             {
-                // 双击已完成条目 → 一键删除（与 README 行为一致）
+                // 双击已完成条目 → 一键删除（与 README 行为一致），先入回收站可还原
                 if (item.IsDone)
                 {
+                    RecycleBinService.AddToRecycleBin(item);
                     _items.Remove(item);
                     _storage.SaveTodos(_items);
                     return;
@@ -609,7 +614,22 @@ namespace WinKit.Todo
         {
             var id   = (Guid)((WinButton)sender).Tag;
             var item = _items.FirstOrDefault(i => i.Id == id);
-            if (item != null) { _items.Remove(item); _storage.SaveTodos(_items); }
+            if (item != null)
+            {
+                RecycleBinService.AddToRecycleBin(item);
+                _items.Remove(item);
+                _storage.SaveTodos(_items);
+            }
+        }
+
+        /// <summary>
+        /// 从回收站还原待办：插到列表顶部，保持原始 ID 与创建时间。
+        /// </summary>
+        public void RestoreTodoItem(TodoItem item)
+        {
+            if (item == null || _items.Any(i => i.Id == item.Id)) return;
+            _items.Insert(0, item);
+            _storage.SaveTodos(_items);
         }
 
         // ══════════════════════════════════════════════

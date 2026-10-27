@@ -25,6 +25,7 @@ namespace WinKit.Clipboard.Services
         private readonly string _dbPath;
         private readonly ObservableCollection<ClipboardItem> _items;
         private readonly SettingsManager _settingsManager;
+        private readonly ImageCleanupService? _imageCleanup;
         private SqliteConnection _connection = null!;
         private bool _isFullyLoaded = false;
         private int _insertsSinceCleanup = 0;
@@ -50,6 +51,15 @@ namespace WinKit.Clipboard.Services
 
             InitializeDatabase();
             LoadInitialData();
+
+            // 图片缓存生命周期清理（自上游 v2.11 移植）：
+            // 启动 10 秒后初次清理 + 每 12 小时轮询 + 新增图片触发；
+            // 快照与移除均经 UI 线程调度，避免跨线程操作集合。
+            _imageCleanup = new ImageCleanupService(
+                settingsManager,
+                () => Application.Current?.Dispatcher.Invoke(() => _items.ToList())
+                      ?? new List<ClipboardItem>(),
+                RemoveItemsBatch);
 
             // 后台分批加载剩余历史数据，避免阻塞 UI
             _ = LoadRemainingDataAsync();
@@ -147,6 +157,9 @@ namespace WinKit.Clipboard.Services
 
             InsertItemToDb(item);
             _items.Insert(0, item);
+
+            // 新增图片后触发缓存检查（保留天数 / 容量上限），服务内部有防重入
+            _imageCleanup?.TriggerCleanup();
 
             if (++_insertsSinceCleanup >= CleanupThrottle)
             {
@@ -373,6 +386,32 @@ namespace WinKit.Clipboard.Services
             }
         }
 
+        /// <summary>
+        /// 批量移除条目（图片缓存清理服务的回调）：集合操作回 UI 线程，删除入库走事务。
+        /// </summary>
+        private void RemoveItemsBatch(List<ClipboardItem> items)
+        {
+            if (items == null || items.Count == 0) return;
+
+            var ids = new HashSet<Guid>(items.Select(i => i.Id));
+            Application.Current?.Dispatcher.Invoke(() =>
+            {
+                foreach (var it in _items.Where(i => ids.Contains(i.Id)).ToList())
+                {
+                    _items.Remove(it);
+                }
+            });
+
+            try
+            {
+                DeleteItemsBatchFromDb(items);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ClipboardManager: 批量移除缓存条目失败 - {ex.Message}");
+            }
+        }
+
         private void DeleteItemsBatchFromDb(List<ClipboardItem> items)
         {
             // 删除关联的图片文件
@@ -572,6 +611,7 @@ namespace WinKit.Clipboard.Services
         {
             try
             {
+                _imageCleanup?.Dispose();
                 _connection?.Close();
                 _connection?.Dispose();
             }

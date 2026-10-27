@@ -41,6 +41,9 @@ namespace WinKit
         private Todo.MainWindow? _todoWindow;
         private Clipboard.MainWindow? _pasteWindow;
 
+        /// <summary>待办历史（回收站）窗口：惰性创建、复用单实例</summary>
+        private Todo.HistoryWindow? _historyWindow;
+
         /// <summary>单实例互斥体。持有期间保证同一会话只有一个 WinKit 进程常驻</summary>
         private Mutex? _singleInstanceMutex;
         /// <summary>用于让第二个实例唤醒首个实例主窗口的命名事件</summary>
@@ -98,6 +101,7 @@ namespace WinKit
             // 4. 初始化合并后的托盘服务
             _trayHelper = new TrayHelper(this, _settingsManager, _todoWindow, _pasteWindow, _settingsWindow);
             _todoWindow.SetSettingsWindow(_settingsWindow);
+            _trayHelper.TodoHistoryRequested = ShowTodoHistory;
 
             // 5. 装配低级键盘钩子，接管剪贴板唤出键（默认 Win+V）。
             //    含 Win 的组合注册不上 RegisterHotKey，只能走钩子；钩子顺带吞掉按键，
@@ -397,6 +401,19 @@ namespace WinKit
 
             if (_pasteWindow.IsVisible) _pasteWindow.Hide();
             else _pasteWindow.ShowAtMouse();
+        }
+
+        /// <summary>打开「待办历史」（回收站）窗口：惰性创建、复用单实例</summary>
+        private void ShowTodoHistory()
+        {
+            if (_todoWindow == null) return;
+
+            if (_historyWindow == null || !_historyWindow.IsLoaded)
+            {
+                _historyWindow = new Todo.HistoryWindow(_todoWindow);
+            }
+            _historyWindow.Show();
+            _historyWindow.Activate();
         }
 
         /// <summary>开启/关闭翻译 & OCR 模块及其全局热键（供托盘调用）</summary>

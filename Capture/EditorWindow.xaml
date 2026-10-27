@@ -124,15 +124,22 @@
                 </StackPanel>
             </Border>
 
-            <!-- ══ 图像 + 标注层 ══ -->
-            <Grid x:Name="ImageHost" Background="#FF101010">
-                <Image x:Name="BaseImage" Stretch="Fill"/>
-                <Canvas x:Name="OverlayCanvas"
-                        Background="Transparent"
-                        MouseLeftButtonDown="Canvas_MouseLeftButtonDown"
-                        MouseMove="Canvas_MouseMove"
-                        MouseLeftButtonUp="Canvas_MouseLeftButtonUp"/>
-            </Grid>
+            <!-- ══ 图像 + 标注层（大图溢出屏幕时可滚动查看，工具栏始终可见） ══ -->
+            <ScrollViewer x:Name="ImageScroller"
+                          VerticalScrollBarVisibility="Auto"
+                          HorizontalScrollBarVisibility="Auto"
+                          Background="#FF101010"
+                          Focusable="False">
+                <Grid x:Name="ImageHost" Background="#FF101010">
+                    <Image x:Name="BaseImage" Stretch="Fill"/>
+                    <Canvas x:Name="OverlayCanvas"
+                            Background="Transparent"
+                            MouseLeftButtonDown="Canvas_MouseLeftButtonDown"
+                            MouseMove="Canvas_MouseMove"
+                            MouseRightButtonDown="Canvas_MouseRightButtonDown"
+                            MouseLeftButtonUp="Canvas_MouseLeftButtonUp"/>
+                </Grid>
+            </ScrollViewer>
 
         </DockPanel>
     </Border>

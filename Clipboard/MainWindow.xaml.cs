@@ -170,10 +170,21 @@ namespace WinKit.Clipboard
             if (sender is ListBoxItem item && item.Content is ClipboardItem clipItem)
             {
                 if (clipItem.Type == ClipboardItemType.Image)
-                    CopyImageToClipboard(clipItem);
+                {
+                    _ = CopyImageToClipboardAndNotifyAsync(clipItem);
+                }
                 else
                     CopyItemToClipboard(clipItem);
             }
+        }
+
+        /// <summary>单击复制图片：后台写入完成后提示结果</summary>
+        private async Task CopyImageToClipboardAndNotifyAsync(ClipboardItem item)
+        {
+            if (await CopyImageToClipboardAsync(item))
+                ShowToast("已复制图片到剪贴板");
+            else
+                ShowToast("复制图片失败");
         }
 
         private void ClipboardList_KeyDown(object sender, System.Windows.Input.KeyEventArgs e)
@@ -200,7 +211,11 @@ namespace WinKit.Clipboard
             if (item == null || string.IsNullOrEmpty(item.Content)) return;
             try
             {
-                System.Windows.Clipboard.SetText(item.Content);
+                // Win32 直写剪贴板，避免 WPF Clipboard 的阻塞重试；失败时回退 WPF 通道
+                if (!Services.FastClipboard.SetTextFast(item.Content))
+                {
+                    System.Windows.Clipboard.SetText(item.Content);
+                }
                 _copiedItemId = item.Id;
                 ShowToast("已复制到系统剪贴板");
             }
@@ -210,44 +225,25 @@ namespace WinKit.Clipboard
             }
         }
 
-        /// <summary>将图片项复制到系统剪贴板</summary>
-        private void CopyImageToClipboard(ClipboardItem item)
+        /// <summary>将图片项复制到系统剪贴板（后台 STA 线程写入，不阻塞 UI）</summary>
+        private async Task<bool> CopyImageToClipboardAsync(ClipboardItem item)
         {
-            if (item?.ImagePath == null || !File.Exists(item.ImagePath)) return;
+            if (item?.ImagePath == null || !File.Exists(item.ImagePath)) return false;
             try
             {
-                var bitmap = LoadBitmap(item.ImagePath);
-                if (bitmap != null)
+                // 使用独立 STA 线程写图，彻底避开 UI 线程阻塞与剪贴板占用冲突
+                bool ok = await Services.FastClipboard.SetImageFastAsync(item.ImagePath);
+                if (ok)
                 {
-                    System.Windows.Clipboard.SetImage(bitmap);
                     _copiedItemId = item.Id;
-                    ShowToast("已复制图片到剪贴板");
+                    return true;
                 }
             }
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"复制图片失败: {ex.Message}");
             }
-        }
-
-        /// <summary>从文件路径加载 BitmapSource（OnLoad 模式，不锁定文件）</summary>
-        private static BitmapSource? LoadBitmap(string path)
-        {
-            try
-            {
-                var bitmap = new BitmapImage();
-                bitmap.BeginInit();
-                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.UriSource = new Uri(path, UriKind.Absolute);
-                bitmap.EndInit();
-                bitmap.Freeze();
-                return bitmap;
-            }
-            catch (Exception ex)
-            {
-                System.Diagnostics.Debug.WriteLine($"加载图片失败: {ex.Message}");
-                return null;
-            }
+            return false;
         }
 
         private async void UseSelectedItem(ClipboardItem item)
@@ -258,12 +254,16 @@ namespace WinKit.Clipboard
             {
                 if (item.Type == ClipboardItemType.Image)
                 {
-                    CopyImageToClipboard(item);
+                    // 写图失败则中止回填，避免把旧剪贴板内容粘出去
+                    if (!await CopyImageToClipboardAsync(item)) return;
                 }
                 else
                 {
                     if (string.IsNullOrEmpty(item.Content)) return;
-                    System.Windows.Clipboard.SetText(item.Content);
+                    if (!Services.FastClipboard.SetTextFast(item.Content))
+                    {
+                        System.Windows.Clipboard.SetText(item.Content);
+                    }
                 }
 
                 _copiedItemId = null;

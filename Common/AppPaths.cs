@@ -31,6 +31,11 @@ namespace WinKit.Common
         public static readonly string Images = Path.Combine(AppData, "images");
 
         /// <summary>
+        /// 待办回收站存储路径（recyclebin.jsonl，JSON Lines 明文）
+        /// </summary>
+        public static readonly string RecycleBin = Path.Combine(AppData, "recyclebin.jsonl");
+
+        /// <summary>
         /// 统一配置文件路径 (settings.json)
         /// </summary>
         public static readonly string Settings = Path.Combine(AppData, "settings.json");

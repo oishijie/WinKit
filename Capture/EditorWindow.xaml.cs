@@ -89,6 +89,13 @@ namespace WinKit.Capture
             OverlayCanvas.Width = w;
             OverlayCanvas.Height = h;
 
+            // 窗口钳制到所在屏幕工作区：全屏/大区域截图时窗口不再溢出屏幕，
+            // 超出部分由 ScrollViewer 滚动查看，工具栏始终可达。
+            // （ComposeImage 渲染的是 ImageHost 完整 Visual，不受滚动视口影响，输出分辨率不变。）
+            var wa = SWF.Screen.FromRectangle(_region).WorkingArea;
+            MaxWidth = Math.Max(320, wa.Width / _scaleX);
+            MaxHeight = Math.Max(240, wa.Height / _scaleY);
+
             UpdateLayout();
             PositionNearRegion();
 
@@ -301,6 +308,20 @@ namespace WinKit.Capture
                     _penPreview?.Points.Add(p);
                     break;
             }
+
+            e.Handled = true;
+        }
+
+        /// <summary>右键取消当前正在进行的绘制（画笔拖错了不用 Ctrl+Z，直接右键丢弃）</summary>
+        private void Canvas_MouseRightButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (!_drawing) return;
+            _drawing = false;
+            OverlayCanvas.ReleaseMouseCapture();
+
+            if (_rectPreview != null) { OverlayCanvas.Children.Remove(_rectPreview); _rectPreview = null; }
+            if (_arrowPreview != null) { OverlayCanvas.Children.Remove(_arrowPreview); _arrowPreview = null; }
+            if (_penPreview != null) { OverlayCanvas.Children.Remove(_penPreview); _penPreview = null; }
 
             e.Handled = true;
         }

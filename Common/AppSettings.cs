@@ -97,6 +97,9 @@ namespace WinKit.Common
         public bool TodoIsPinned { get; set; } = false;
         public bool TodoIsPassThrough { get; set; } = false;
 
+        /// <summary>待办回收站保留天数（超期自动清理；默认 60 天）</summary>
+        public int RecycleBinRetentionDays { get; set; } = 60;
+
         // ── 不透明度设置 ────────────────────────────────
         public int WindowOpacity { get; set; } = 80; // 80% 不透明度（默认）
 
@@ -104,6 +107,13 @@ namespace WinKit.Common
         public int PasteMaxItems { get; set; } = 100;
         public bool PasteEnableTextDeduplication { get; set; } = true;
         public bool PasteEnableMonitoring { get; set; } = true;
+
+        // ── 剪贴板图片缓存清理（自上游 v2.11 移植）──────
+        /// <summary>图片缓存保留天数，超期自动清理（默认 15 天）</summary>
+        public int ClipboardImageRetentionDays { get; set; } = 15;
+
+        /// <summary>图片缓存容量上限（MB），超出后折半淘汰最旧的一半（默认 100MB）</summary>
+        public int ClipboardImageMaxStorageMB { get; set; } = 100;
 
         // ── Translate 翻译 & OCR 设置 ───────────────────
         /// <summary>是否启用翻译/OCR 模块及其全局热键</summary>

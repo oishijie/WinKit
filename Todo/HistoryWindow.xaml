@@ -1,0 +1,201 @@
+<Window x:Class="WinKit.Todo.HistoryWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="待办历史"
+        Width="320"
+        Height="440"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Topmost="True"
+        PreviewKeyDown="Window_PreviewKeyDown"
+        Deactivated="Window_Deactivated"
+        WindowStartupLocation="CenterScreen">
+
+    <!-- 主容器：与 Clipboard / Todo 同款圆角毛玻璃卡片 -->
+    <Border Background="#CCFFFFFF"
+            CornerRadius="10"
+            BorderBrush="#22000000"
+            BorderThickness="1">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="40"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="44"/>
+            </Grid.RowDefinitions>
+
+            <!-- ══════════════════════════════════════════
+                 1. 标题栏：拖动 + 关闭
+            ══════════════════════════════════════════ -->
+            <Grid Grid.Row="0" x:Name="TitleBar"
+                  MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"
+                  Background="Transparent">
+                <TextBlock Text="待办历史"
+                           VerticalAlignment="Center"
+                           Margin="14,0"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           Foreground="#333"/>
+
+                <Button x:Name="CloseBtn"
+                        Content="✕"
+                        HorizontalAlignment="Right"
+                        VerticalAlignment="Center"
+                        Margin="0,0,8,0"
+                        Style="{StaticResource TitleBarBtn}"
+                        Opacity="1"
+                        Click="CloseBtn_Click"
+                        ToolTip="关闭"/>
+            </Grid>
+
+            <!-- 2. 统计栏 -->
+            <TextBlock Grid.Row="1" x:Name="CountText"
+                       Text="0 条已删除待办"
+                       FontSize="11"
+                       Foreground="#888"
+                       Margin="16,0,16,6"/>
+
+            <!-- ══════════════════════════════════════════
+                 3. 历史列表
+            ══════════════════════════════════════════ -->
+            <Grid Grid.Row="2" Margin="14,0,14,0">
+                <!-- 空态占位 -->
+                <TextBlock x:Name="EmptyPlaceholder"
+                           Text="暂无已删除的待办历史"
+                           FontSize="12"
+                           Foreground="#999"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"
+                           Visibility="Collapsed"/>
+
+                <ListBox x:Name="HistoryList"
+                         Background="Transparent"
+                         BorderThickness="0"
+                         ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListBox.Template>
+                        <ControlTemplate TargetType="ListBox">
+                            <ScrollViewer Style="{StaticResource NarrowScrollViewer}" Focusable="False">
+                                <ItemsPresenter/>
+                            </ScrollViewer>
+                        </ControlTemplate>
+                    </ListBox.Template>
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Margin" Value="0,0,0,6"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <ContentPresenter/>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                            <Border Background="#66FFFFFF"
+                                    BorderBrush="#22000000"
+                                    BorderThickness="1"
+                                    CornerRadius="6"
+                                    Padding="10,6">
+                                <Grid>
+                                    <!-- 内容层：标题 + 删除时间 -->
+                                    <StackPanel VerticalAlignment="Center">
+                                        <TextBlock Text="{Binding Title}"
+                                                   TextTrimming="CharacterEllipsis"
+                                                   FontSize="12.5"
+                                                   Foreground="#333"/>
+                                        <TextBlock Text="{Binding FormattedTime}"
+                                                   FontSize="10"
+                                                   Foreground="#999"
+                                                   Margin="0,3,0,0"/>
+                                    </StackPanel>
+
+                                    <!-- 悬浮操作层：悬停时浮现 -->
+                                    <StackPanel x:Name="OverlayActions"
+                                                Orientation="Horizontal"
+                                                HorizontalAlignment="Right"
+                                                VerticalAlignment="Center"
+                                                Panel.ZIndex="10"
+                                                Opacity="0"
+                                                IsHitTestVisible="False"
+                                                Margin="0,0,2,0">
+                                        <Button Content="⟲"
+                                                Style="{StaticResource ActionBtn}"
+                                                Tag="{Binding}"
+                                                Click="RestoreBtn_Click"
+                                                ToolTip="还原待办"/>
+                                        <Button Content="✕"
+                                                Style="{StaticResource ActionBtn}"
+                                                Tag="{Binding}"
+                                                Click="DeleteBtn_Click"
+                                                ToolTip="彻底删除"/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <DataTemplate.Triggers>
+                                <DataTrigger Binding="{Binding IsMouseOver, RelativeSource={RelativeSource AncestorType=ListBoxItem}}" Value="True">
+                                    <Setter TargetName="OverlayActions" Property="Opacity" Value="1"/>
+                                    <Setter TargetName="OverlayActions" Property="IsHitTestVisible" Value="True"/>
+                                </DataTrigger>
+                            </DataTemplate.Triggers>
+                        </DataTemplate>
+                    </ListBox.ItemTemplate>
+                </ListBox>
+            </Grid>
+
+            <!-- ══════════════════════════════════════════
+                 4. 底栏：清空全部
+            ══════════════════════════════════════════ -->
+            <Border Grid.Row="3" BorderBrush="#22000000" BorderThickness="0,1,0,0">
+                <Grid Margin="14,0">
+                    <Button x:Name="ClearAllBtn"
+                            Content="清空全部"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Center"
+                            Width="72"
+                            Height="24"
+                            Background="#33FFFFFF"
+                            BorderBrush="#22000000"
+                            BorderThickness="1"
+                            Foreground="#444"
+                            FontSize="11.5"
+                            Cursor="Hand"
+                            FocusVisualStyle="{x:Null}"
+                            Click="ClearAllBtn_Click">
+                        <Button.Template>
+                            <ControlTemplate TargetType="Button">
+                                <Border x:Name="bd"
+                                        Background="{TemplateBinding Background}"
+                                        BorderBrush="{TemplateBinding BorderBrush}"
+                                        BorderThickness="{TemplateBinding BorderThickness}"
+                                        CornerRadius="{StaticResource Radius4}">
+                                    <ContentPresenter HorizontalAlignment="Center"
+                                                      VerticalAlignment="Center"/>
+                                </Border>
+                                <ControlTemplate.Triggers>
+                                    <Trigger Property="IsMouseOver" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="#55FFFFFF"/>
+                                    </Trigger>
+                                    <Trigger Property="IsPressed" Value="True">
+                                        <Setter TargetName="bd" Property="Background" Value="#22FFFFFF"/>
+                                    </Trigger>
+                                </ControlTemplate.Triggers>
+                            </ControlTemplate>
+                        </Button.Template>
+                    </Button>
+                </Grid>
+            </Border>
+
+        </Grid>
+    </Border>
+</Window>

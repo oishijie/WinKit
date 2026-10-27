@@ -1,0 +1,18 @@
+<Project>
+  <!--
+    构建环境适配（本机 SDK 10.0.302，项目目标 net8.0-windows）：
+
+    SDK 10 还原 net8.0 目标时，按其内置清单强制下载 targeting pack（精确 = 8.0.29）。
+    项目 NuGet.Config 只走腾讯镜像（api.nuget.org 直连不稳），而腾讯镜像没有
+    8.0.29、只有 8.0.33，还原报 NU1102。
+
+    这里用 SDK 的 ref pack 版本覆盖属性，指到镜像已有的 8.0.33：
+    仅影响编译期引用的 API 集合（向前兼容，无风险）；
+    运行时由本机安装的 WindowsDesktop 8.0.x 运行时承载，与该属性无关。
+  -->
+  <PropertyGroup>
+    <MicrosoftNETCoreAppRefVersion>8.0.33</MicrosoftNETCoreAppRefVersion>
+    <MicrosoftAspNetCoreAppRefVersion>8.0.33</MicrosoftAspNetCoreAppRefVersion>
+    <MicrosoftWindowsDesktopAppRefVersion>8.0.33</MicrosoftWindowsDesktopAppRefVersion>
+  </PropertyGroup>
+</Project>

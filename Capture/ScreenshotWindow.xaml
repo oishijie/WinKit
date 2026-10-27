@@ -9,7 +9,7 @@
         Topmost="True"
         Cursor="Cross"
         WindowStartupLocation="Manual"
-        KeyDown="Window_KeyDown">
+        PreviewKeyDown="Window_KeyDown">
 
     <Canvas x:Name="RootCanvas">
         <!-- 截屏底图（覆盖整个虚拟屏幕） -->

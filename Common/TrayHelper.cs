@@ -56,9 +56,13 @@ namespace WinKit.Common
         // ── 精简后的菜单项 ─────────────────────────────
         private readonly MenuItem _itemCapture;    // 截图
         private readonly MenuItem _itemTodoSwitch; // 显示 / 隐藏待办（文字随窗口状态动态切换）
+        private readonly MenuItem _itemHistory;    // 待办历史（回收站）
         private readonly MenuItem _itemPaste;      // 剪贴板历史
         private readonly MenuItem _itemSettings;   // 设置
         private readonly MenuItem _itemExit;       // 退出
+
+        /// <summary>打开「待办历史」窗口的回调，由 App 装配（窗口实例由 App 持有）</summary>
+        public Action? TodoHistoryRequested;
 
         // 双击/单击计时器
         private readonly SWF.Timer _clickTimer;
@@ -100,6 +104,10 @@ namespace WinKit.Common
             _itemTodoSwitch = new MenuItem { Header = "显示待办" };
             _itemTodoSwitch.Click += (s, e) => ToggleTodoWindow();
 
+            // ── 3.6 待办历史（回收站）────────────────────────
+            _itemHistory = new MenuItem { Header = "待办历史" };
+            _itemHistory.Click += (s, e) => TodoHistoryRequested?.Invoke();
+
             // ── 4. 剪贴板历史 ────────────────────────────────
             _itemPaste = new MenuItem { Header = "剪贴板历史" };
             _itemPaste.Click += (s, e) => ShowPasteWindow();
@@ -115,6 +123,7 @@ namespace WinKit.Common
             // ── 7. 上下文菜单组装 ──────────────────────────────
             _contextMenu.Items.Add(_itemCapture);
             _contextMenu.Items.Add(_itemTodoSwitch);
+            _contextMenu.Items.Add(_itemHistory);
             _contextMenu.Items.Add(_itemPaste);
             _contextMenu.Items.Add(new Separator());
             _contextMenu.Items.Add(_itemSettings);
