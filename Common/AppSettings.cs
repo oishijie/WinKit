@@ -167,6 +167,15 @@ namespace WinKit.Common
         /// <summary>拉取成功时气泡提示（默认开）</summary>
         public bool SyncNotifyPull { get; set; } = true;
 
+        /// <summary>
+        /// 用右下角操作卡片替代托盘气泡（默认开）。
+        /// 卡片带「复制 / 存到下载 / 打开」按钮；关掉则退回传统气泡，只是没有按钮。
+        /// </summary>
+        public bool SyncToastEnabled { get; set; } = true;
+
+        /// <summary>卡片停留秒数（默认 6；鼠标悬停期间暂停计时）</summary>
+        public int SyncToastSeconds { get; set; } = 6;
+
         // ── Update 自动更新设置 ─────────────────────────
         /// <summary>自动检查更新：启动后每日静默检查一次，多源择优（默认开）</summary>
         public bool UpdateAutoCheck { get; set; } = true;

@@ -36,8 +36,12 @@ namespace WinKit.Clipboard.Services
         private readonly Dispatcher _dispatcher;
         private readonly SHA256 _sha256 = SHA256.Create();
 
-        /// <summary>同步成功通知（推送 / 拉取各一发，后台线程触发，订阅方自行切线程；受通知开关过滤）</summary>
-        public event Action<string>? SyncSucceeded;
+        /// <summary>
+        /// 同步成功通知（推送 / 拉取各一发，后台线程触发，订阅方自行切线程；受通知开关过滤）。
+        /// 载荷是结构化的而非纯文本：通知卡片上的按钮要操作具体内容（写剪贴板、另存、打开），
+        /// 只传一句话的字符串里拿不到文件路径。
+        /// </summary>
+        public event Action<SyncToastPayload>? SyncSucceeded;
 
         /// <summary>内容被守门规则跳过时的提示（超上限 / 黑名单 / 不支持的类型），始终触发</summary>
         public event Action<string>? SyncSkipped;
@@ -212,7 +216,16 @@ namespace WinKit.Clipboard.Services
             _lastRemoteHash = profile.Hash;
 
             if (_settingsManager.Settings.SyncNotifyPull)
-                SyncSucceeded?.Invoke($"收到远端：{Preview(text)}");
+            {
+                SyncSucceeded?.Invoke(new SyncToastPayload
+                {
+                    Kind = SyncToastKind.Text,
+                    IsPush = false,
+                    Title = "收到远端文字",
+                    Subtitle = Preview(text),
+                    Text = text
+                });
+            }
         }
 
         private async Task PullImageAsync(SyncClipboardProfile profile, CancellationToken ct)
@@ -248,6 +261,7 @@ namespace WinKit.Clipboard.Services
             }
 
             int w = 0, h = 0;
+            string? pulledImagePath = null;
             var ext = Path.GetExtension(dataName);
             await _dispatcher.InvokeAsync(() =>
             {
@@ -265,6 +279,7 @@ namespace WinKit.Clipboard.Services
 
                     // 剪贴板双格式：位图（即时粘贴显示）+ 原始文件（可粘贴出原文件）
                     var imagePath = _clipboardManager.Items.Count > 0 ? _clipboardManager.Items[0].ImagePath : null;
+                    pulledImagePath = imagePath;
                     if (imagePath != null && File.Exists(imagePath))
                     {
                         var data = new System.Windows.DataObject();
@@ -289,7 +304,17 @@ namespace WinKit.Clipboard.Services
             _lastRemoteHash = profile.Hash;
 
             if (s.SyncNotifyPull)
-                SyncSucceeded?.Invoke($"收到远端图片 ({w}×{h}, {FormatSize(bytes.Length)})");
+            {
+                SyncSucceeded?.Invoke(new SyncToastPayload
+                {
+                    Kind = SyncToastKind.Image,
+                    IsPush = false,
+                    Title = "收到远端图片",
+                    Subtitle = $"{w} × {h} · {FormatSize(bytes.Length)}",
+                    FilePath = pulledImagePath,
+                    ImageBytes = bytes
+                });
+            }
         }
 
         private async Task PullFileAsync(SyncClipboardProfile profile, CancellationToken ct)
@@ -352,7 +377,14 @@ namespace WinKit.Clipboard.Services
             _lastRemoteHash = profile.Hash;
 
             if (s.SyncNotifyPull)
-                SyncSucceeded?.Invoke($"收到远端文件：{dataName} ({FormatSize(bytes.Length)})");
+                SyncSucceeded?.Invoke(new SyncToastPayload
+                {
+                    Kind = SyncToastKind.File,
+                    IsPush = false,
+                    Title = "收到远端文件",
+                    Subtitle = $"{dataName} · {FormatSize(bytes.Length)}",
+                    FilePath = localPath
+                });
         }
 
         // ══════════════════════════════════════════════════
@@ -447,7 +479,16 @@ namespace WinKit.Clipboard.Services
                 _lastPushedHash = hash;
                 _lastPushedContentHash = hash;
                 if (_settingsManager.Settings.SyncNotifyPush)
-                    SyncSucceeded?.Invoke($"已推送：{Preview(text)}");
+                {
+                    SyncSucceeded?.Invoke(new SyncToastPayload
+                    {
+                        Kind = SyncToastKind.Text,
+                        IsPush = true,
+                        Title = "已同步到手机",
+                        Subtitle = Preview(text),
+                        Text = text
+                    });
+                }
             }
         }
 
@@ -497,7 +538,17 @@ namespace WinKit.Clipboard.Services
                 _lastPushedHash = hash;
                 _lastPushedContentHash = contentHash;
                 if (_settingsManager.Settings.SyncNotifyPush)
-                    SyncSucceeded?.Invoke($"已推送图片 ({FormatSize(length)})");
+                {
+                    SyncSucceeded?.Invoke(new SyncToastPayload
+                    {
+                        Kind = SyncToastKind.Image,
+                        IsPush = true,
+                        Title = "已同步图片到手机",
+                        Subtitle = FormatSize(length),
+                        FilePath = imagePath,
+                        ImageBytes = bytes
+                    });
+                }
             }
         }
 
@@ -566,7 +617,16 @@ namespace WinKit.Clipboard.Services
                 _lastPushedHash = hash;
                 _lastPushedContentHash = contentHash;
                 if (s.SyncNotifyPush)
-                    SyncSucceeded?.Invoke($"已推送文件：{name} ({FormatSize(length)})");
+                {
+                    SyncSucceeded?.Invoke(new SyncToastPayload
+                    {
+                        Kind = SyncToastKind.File,
+                        IsPush = true,
+                        Title = "已同步文件到手机",
+                        Subtitle = $"{name} · {FormatSize(length)}",
+                        FilePath = filePath
+                    });
+                }
             }
         }
 
@@ -663,7 +723,15 @@ namespace WinKit.Clipboard.Services
                 _lastPushedHash = groupHash;
                 _lastPushedContentHash = transferHash;
                 if (_settingsManager.Settings.SyncNotifyPush)
-                    SyncSucceeded?.Invoke($"已推送文件组（{files.Count} 项，{FormatSize(total)}）");
+                {
+                    SyncSucceeded?.Invoke(new SyncToastPayload
+                    {
+                        Kind = SyncToastKind.Group,
+                        IsPush = true,
+                        Title = "已同步文件组到手机",
+                        Subtitle = $"{files.Count} 项 · {FormatSize(total)}"
+                    });
+                }
             }
         }
 
@@ -827,7 +895,16 @@ namespace WinKit.Clipboard.Services
             _lastRemoteHash = profile.Hash;
 
             if (s.SyncNotifyPull)
-                SyncSucceeded?.Invoke($"收到远端文件组（{topEntries.Count} 项，{FormatSize(bytes.Length)}）");
+            {
+                SyncSucceeded?.Invoke(new SyncToastPayload
+                {
+                    Kind = SyncToastKind.Group,
+                    IsPush = false,
+                    Title = "收到远端文件组",
+                    Subtitle = $"{topEntries.Count} 项 · {FormatSize(bytes.Length)}",
+                    FilePath = extractDir
+                });
+            }
         }
 
         // ══════════════════════════════════════════════════

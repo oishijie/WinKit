@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Specialized;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using WinKit.Capture;
 using WinKit.Common;
 using WinKit.Clipboard.Services;
@@ -36,6 +38,8 @@ namespace WinKit
         private string? _appliedTopLevelSignature;
 
         private TrayHelper? _trayHelper;
+        /// <summary>右下角通知卡片调度器（收到 / 推送同步内容时用，替代无法带按钮的托盘气球）</summary>
+        private ToastService? _toastService;
         private TranslateModule? _translateModule;
         private CaptureModule? _captureModule;
         private SettingsWindow? _settingsWindow;
@@ -119,6 +123,14 @@ namespace WinKit
 
             // 3.5 设置中心窗口（常驻隐藏，复用以秒开）
             _settingsWindow = new SettingsWindow(_settingsManager);
+
+            // 3.52 通知卡片调度器。放在托盘之前创建，托盘菜单与同步引擎都可能早于设置窗触发通知。
+            _toastService = new ToastService
+            {
+                Enabled = _settingsManager.Settings.SyncToastEnabled,
+                TimeoutSeconds = _settingsManager.Settings.SyncToastSeconds,
+                ActionHandler = HandleToastAction
+            };
 
             // 3.6 设置中心进入快捷键录制时，临时挂起各模块的全局热键。
             //     否则用户按下「当前已生效的组合」时，Windows 会把按键直接发给注册者，
@@ -351,8 +363,8 @@ namespace WinKit
             if (_pushOnlyEngine == null)
             {
                 _pushOnlyEngine = new SyncEngine(_clipboardManager!, _settingsManager!);
-                _pushOnlyEngine.SyncSucceeded += OnSyncSucceeded;
-                _pushOnlyEngine.SyncSkipped += OnSyncSucceeded;
+                _pushOnlyEngine.SyncSucceeded += OnSyncToast;
+                _pushOnlyEngine.SyncSkipped += OnSyncSkippedTip;
             }
             return _pushOnlyEngine;
         }
@@ -394,6 +406,13 @@ namespace WinKit
         /// <summary>设置变更：剪贴板唤出键 / 顶层热键可能变了，需要重装</summary>
         private void OnSettingsChangedForHotkeys(object? sender, AppSettings settings)
         {
+            // 通知卡片的开关与停留时长不属于热键，但这里是设置落盘后的公共入口，顺手同步一份
+            if (_toastService != null)
+            {
+                _toastService.Enabled = settings.SyncToastEnabled;
+                _toastService.TimeoutSeconds = settings.SyncToastSeconds;
+            }
+
             // 录制期间跳过：那一刻按键正走钩子转发通道，重装会把这次按击吃掉；
             // 录制结束时会统一按最新配置装回去（见 OnHotkeyRecordingChanged）。
             if (_settingsWindow?.IsRecordingHotkey == true) return;
@@ -682,8 +701,8 @@ namespace WinKit
             if (_clipboardManager == null || _settingsManager == null) return;
 
             _syncEngine = new SyncEngine(_clipboardManager, _settingsManager);
-            _syncEngine.SyncSucceeded += OnSyncSucceeded;
-            _syncEngine.SyncSkipped += OnSyncSucceeded; // 守门提示同样走气泡
+            _syncEngine.SyncSucceeded += OnSyncToast;
+            _syncEngine.SyncSkipped += OnSyncSkippedTip; // 守门提示不需要按钮，仍走托盘气泡
             _syncEngine.Start();
         }
 
@@ -720,13 +739,209 @@ namespace WinKit
             }
         }
 
-        /// <summary>同步成功 → 托盘气泡提示（事件来自后台线程，切回 UI 线程）</summary>
-        private void OnSyncSucceeded(string message)
+        // ══════════════════════════════════════════════
+        //  同步通知：右下角操作卡片
+        // ══════════════════════════════════════════════
+
+        /// <summary>
+        /// 同步成功 → 右下角操作卡片（事件来自后台线程，切回 UI 线程）。
+        /// 只有「收到」才弹卡片：本地推出去的内容自己心里有数，
+        /// 每次复制都弹一张反而吵，推送仍走原来的托盘气泡。
+        /// 卡片总开关关掉时，收到也退回气泡，功能不丢、只是没有按钮。
+        /// </summary>
+        private void OnSyncToast(SyncToastPayload payload)
         {
             Dispatcher.Invoke(() =>
             {
-                _trayHelper?.ShowSyncTip(message);
+                var enabled = _settingsManager?.Settings.SyncToastEnabled ?? false;
+                if (payload.IsPush || _toastService == null || !enabled)
+                {
+                    _trayHelper?.ShowSyncTip($"{payload.Title}：{payload.Subtitle}");
+                    return;
+                }
+                _toastService.Show(payload);
             });
+        }
+
+        /// <summary>守门提示（超上限 / 命中黑名单）不需要按钮，仍走托盘气泡</summary>
+        private void OnSyncSkippedTip(string message)
+        {
+            Dispatcher.Invoke(() => _trayHelper?.ShowSyncTip(message));
+        }
+
+        /// <summary>卡片按钮的落地动作：复制 / 存到下载 / 打开 / 定位 / 看历史</summary>
+        private void HandleToastAction(SyncToastPayload payload, ToastAction action)
+        {
+            try
+            {
+                switch (action)
+                {
+                    case ToastAction.Copy:
+                        CopyPayloadToClipboard(payload);
+                        break;
+
+                    case ToastAction.SaveToDownloads:
+                        SavePayloadToDownloads(payload);
+                        break;
+
+                    case ToastAction.Open:
+                        if (!string.IsNullOrEmpty(payload.FilePath) && File.Exists(payload.FilePath))
+                            Process.Start(new ProcessStartInfo(payload.FilePath) { UseShellExecute = true });
+                        break;
+
+                    case ToastAction.OpenFolder:
+                        RevealInExplorer(payload.FilePath);
+                        break;
+
+                    case ToastAction.OpenClipboardPanel:
+                        _pasteWindow?.ShowAtMouse();
+                        break;
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.WriteLine($"HandleToastAction({action}) 失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 把卡片承载的内容重新写回系统剪贴板。
+        /// 收到内容时本来就已经写过一次，这个按钮是给「中途又复制了别的东西」兜底的。
+        /// </summary>
+        private static void CopyPayloadToClipboard(SyncToastPayload p)
+        {
+            switch (p.Kind)
+            {
+                case SyncToastKind.Text:
+                    if (!string.IsNullOrEmpty(p.Text))
+                        System.Windows.Clipboard.SetText(p.Text);
+                    break;
+
+                case SyncToastKind.Image:
+                {
+                    // 与拉取时的写入口径一致：位图 + 原始文件双格式
+                    var data = new System.Windows.DataObject();
+                    var bmp = LoadPayloadImage(p);
+                    bool has = false;
+                    if (bmp != null) { data.SetImage(bmp); has = true; }
+                    if (!string.IsNullOrEmpty(p.FilePath) && File.Exists(p.FilePath))
+                    {
+                        data.SetFileDropList(new StringCollection { p.FilePath });
+                        has = true;
+                    }
+                    if (has) System.Windows.Clipboard.SetDataObject(data);
+                    break;
+                }
+
+                case SyncToastKind.File:
+                    if (!string.IsNullOrEmpty(p.FilePath) && File.Exists(p.FilePath))
+                        System.Windows.Clipboard.SetFileDropList(new StringCollection { p.FilePath });
+                    break;
+
+                case SyncToastKind.Group:
+                    if (!string.IsNullOrEmpty(p.FilePath) && Directory.Exists(p.FilePath))
+                    {
+                        var list = new StringCollection();
+                        foreach (var f in Directory.GetFiles(p.FilePath)) list.Add(f);
+                        if (list.Count > 0) System.Windows.Clipboard.SetFileDropList(list);
+                    }
+                    break;
+            }
+        }
+
+        private static BitmapImage? LoadPayloadImage(SyncToastPayload p)
+        {
+            try
+            {
+                var bmp = new BitmapImage();
+                bmp.BeginInit();
+                bmp.CacheOption = BitmapCacheOption.OnLoad;
+                if (p.ImageBytes is { Length: > 0 })
+                    bmp.StreamSource = new MemoryStream(p.ImageBytes);
+                else if (!string.IsNullOrEmpty(p.FilePath) && File.Exists(p.FilePath))
+                    bmp.UriSource = new Uri(p.FilePath);
+                else
+                    return null;
+                bmp.EndInit();
+                bmp.Freeze();
+                return bmp;
+            }
+            catch { return null; }
+        }
+
+        /// <summary>复制一份到系统「下载」文件夹，并在资源管理器中选中；多文件组整体拷成子目录</summary>
+        private static void SavePayloadToDownloads(SyncToastPayload p)
+        {
+            if (string.IsNullOrEmpty(p.FilePath)) return;
+            var downloads = GetDownloadsFolder();
+
+            if (Directory.Exists(p.FilePath))
+            {
+                var targetDir = UniquePath(
+                    Path.Combine(downloads, $"WinKit_{DateTime.Now:yyyyMMdd_HHmmss}"), isDir: true);
+                Directory.CreateDirectory(targetDir);
+                foreach (var f in Directory.GetFiles(p.FilePath))
+                    File.Copy(f, Path.Combine(targetDir, Path.GetFileName(f)), overwrite: true);
+                Process.Start("explorer.exe", $"\"{targetDir}\"");
+                return;
+            }
+
+            if (!File.Exists(p.FilePath)) return;
+            var target = UniquePath(Path.Combine(downloads, Path.GetFileName(p.FilePath)), isDir: false);
+            File.Copy(p.FilePath, target, overwrite: false);
+            Process.Start("explorer.exe", $"/select,\"{target}\"");
+        }
+
+        /// <summary>
+        /// 系统「下载」目录。优先查注册表 —— OneDrive 接管过「下载」的机器上，
+        /// 拼 UserProfile\Downloads 拿到的路径是错的。
+        /// </summary>
+        private static string GetDownloadsFolder()
+        {
+            try
+            {
+                using var key = Microsoft.Win32.Registry.CurrentUser.OpenSubKey(
+                    @"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders");
+                if (key?.GetValue("{374DE290-123F-4565-9164-39C4925E467B}") is string path
+                    && !string.IsNullOrWhiteSpace(path))
+                {
+                    Directory.CreateDirectory(path);
+                    return path;
+                }
+            }
+            catch { /* 读不到就走兜底 */ }
+
+            var fallback = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads");
+            Directory.CreateDirectory(fallback);
+            return fallback;
+        }
+
+        /// <summary>同名不覆盖，追加 (1)(2)… 后缀</summary>
+        private static string UniquePath(string path, bool isDir)
+        {
+            if (!File.Exists(path) && !Directory.Exists(path)) return path;
+
+            var dir = Path.GetDirectoryName(path) ?? string.Empty;
+            var name = isDir ? Path.GetFileName(path) : Path.GetFileNameWithoutExtension(path);
+            var ext = isDir ? string.Empty : Path.GetExtension(path);
+
+            for (int i = 1; i < 1000; i++)
+            {
+                var candidate = Path.Combine(dir, $"{name} ({i}){ext}");
+                if (!File.Exists(candidate) && !Directory.Exists(candidate)) return candidate;
+            }
+            return path;
+        }
+
+        /// <summary>在资源管理器中定位：文件则选中，目录则打开</summary>
+        private static void RevealInExplorer(string? path)
+        {
+            if (string.IsNullOrEmpty(path)) return;
+            if (Directory.Exists(path))
+                Process.Start("explorer.exe", $"\"{path}\"");
+            else if (File.Exists(path))
+                Process.Start("explorer.exe", $"/select,\"{path}\"");
         }
 
         // ══════════════════════════════════════════════
@@ -807,6 +1022,7 @@ namespace WinKit
             _keyboardHookService?.Dispose();
             _topLevelHotkeys?.Dispose();
             _clipboardService?.Dispose();
+            _toastService?.DismissAll(); // 卡片是独立置顶窗口，进程退出前先收掉
             _trayHelper?.Dispose();
             _clipboardManager?.Dispose();
             _settingsManager?.Dispose();

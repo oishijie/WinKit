@@ -1107,6 +1107,40 @@
                                                   Style="{StaticResource ToggleSwitch}"
                                                   Click="SyncNotifyPullToggle_Click"/>
                                     </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="右下角操作卡片" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="收到内容时弹出可点按的卡片（复制 / 存到下载 / 打开）；关闭则退回传统托盘气泡" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="SyncToastToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="SyncToastToggle_Click"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="卡片停留时长（秒）" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="2 – 30 秒；鼠标移到卡片上会暂停计时，方便点按钮" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="SyncToastSecondsBox" Grid.Column="1"
+                                                 Style="{StaticResource NumBox}"
+                                                 PreviewTextInput="NumberOnly_PreviewTextInput"
+                                                 LostFocus="SyncToastSecondsBox_Commit"
+                                                 KeyDown="NumBox_KeyDown"/>
+                                    </Grid>
                                 </StackPanel>
                             </Border>
 

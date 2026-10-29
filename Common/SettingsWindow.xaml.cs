@@ -179,6 +179,8 @@ namespace WinKit.Common
                 SyncBlacklistBox.Text = s.SyncFileBlacklist ?? "";
                 SyncNotifyPushToggle.IsChecked = s.SyncNotifyPush;
                 SyncNotifyPullToggle.IsChecked = s.SyncNotifyPull;
+                SyncToastToggle.IsChecked = s.SyncToastEnabled;
+                SyncToastSecondsBox.Text = Clamp(s.SyncToastSeconds, 2, 30).ToString();
                 SyncAutoPushImageToggle.IsChecked = s.SyncAutoPushImage;
                 SyncAutoPushFileToggle.IsChecked = s.SyncAutoPushFile;
                 SyncShellMenuToggle.IsChecked = s.SyncShellMenu || ShellMenuHelper.IsInstalled();
@@ -929,6 +931,23 @@ namespace WinKit.Common
         {
             if (_suspend) return;
             _settingsManager.Settings.SyncNotifyPull = SyncNotifyPullToggle.IsChecked == true;
+            Save();
+        }
+
+        /// <summary>右下角操作卡片总开关：关掉退回托盘气泡，按钮自然也就没了</summary>
+        private void SyncToastToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.SyncToastEnabled = SyncToastToggle.IsChecked == true;
+            Save();
+        }
+
+        private void SyncToastSecondsBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            int seconds = CommitNumber(SyncToastSecondsBox, _settingsManager.Settings.SyncToastSeconds, 2, 30);
+            if (seconds == _settingsManager.Settings.SyncToastSeconds) return;
+            _settingsManager.Settings.SyncToastSeconds = seconds;
             Save();
         }
 
