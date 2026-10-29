@@ -1,4 +1,6 @@
 using System;
+using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Windows;
 using WinKit.Capture;
@@ -14,6 +16,9 @@ namespace WinKit
         private ClipboardService? _clipboardService;
         private ClipboardManager? _clipboardManager;
         private KeyboardHookService? _keyboardHookService;
+        private SyncEngine? _syncEngine;
+        /// <summary>同步总开关关闭时的显式推送专用引擎（不跑轮询循环，仅右键「同步到手机」用）</summary>
+        private SyncEngine? _pushOnlyEngine;
         /// <summary>已装配到钩子上的唤出键快照，用于判断设置变更后是否真需要重装</summary>
         private HotkeyConfig? _appliedClipboardHotkey;
         /// <summary>上面那份快照对应的「剪贴板监控」开关状态</summary>
@@ -66,6 +71,14 @@ namespace WinKit
             //    否则双击/重复启动会跑出多个托盘图标 + 多份 ~300MB 的 OCR 引擎。
             if (!OwnSingleInstance())
             {
+                // 右键「同步到手机」触发：把文件路径写进通道文件，唤醒主实例后退出
+                var clipFiles = ParseClipSendArgs(e.Args);
+                if (clipFiles.Length > 0)
+                {
+                    try { File.AppendAllLines(ShellMenuHelper.ClipSendFilePath, clipFiles); }
+                    catch { /* 通道文件写失败时忽略，主实例无从得知 */ }
+                }
+
                 // 已有实例在运行 → 唤醒它的主窗口（带到前台）后退出本实例
                 SignalExistingInstance();
                 Shutdown();
@@ -75,12 +88,23 @@ namespace WinKit
             // 1. 初始化统一配置管理器
             _settingsManager = new SettingsManager();
 
+            // 1.5 右键菜单开关开着 → 刷新 exe 路径（程序挪位置后自动修正，无需重新开关）
+            if (_settingsManager.Settings.SyncShellMenu)
+            {
+                var exePath = Environment.ProcessPath;
+                if (!string.IsNullOrEmpty(exePath)) ShellMenuHelper.Install(exePath);
+            }
+
+            // 右键直达（无实例运行时首次启动）：留待托盘与引擎就绪后处理
+            var selfClipFiles = ParseClipSendArgs(e.Args);
+
             // 2. 初始化剪贴板监听和数据中心（常驻后台）
             _clipboardService = new ClipboardService();
             _clipboardManager = new ClipboardManager(_settingsManager);
 
             _clipboardService.TextChanged += OnClipboardTextChanged;
             _clipboardService.ImageChanged += OnClipboardImageChanged;
+            _clipboardService.FileChanged += OnClipboardFileChanged;
             if (_settingsManager.Settings.PasteEnableMonitoring)
             {
                 _clipboardService.StartMonitoring();
@@ -102,6 +126,19 @@ namespace WinKit
             _trayHelper = new TrayHelper(this, _settingsManager, _todoWindow, _pasteWindow, _settingsWindow);
             _todoWindow.SetSettingsWindow(_settingsWindow);
             _trayHelper.TodoHistoryRequested = ShowTodoHistory;
+
+            // 4.5 初始化剪贴板同步引擎（SyncClipboard 协议，默认关闭）。
+            //     放在托盘之后：推送 / 拉取成功的气泡提示需要托盘图标。
+            if (_settingsManager.Settings.SyncEnabled)
+            {
+                StartSyncEngine();
+            }
+
+            // 4.6 无实例运行时右键直达的文件：托盘与引擎已就绪，立即推送
+            if (selfClipFiles.Length > 0)
+            {
+                ProcessClipSendFiles(selfClipFiles);
+            }
 
             // 5. 装配低级键盘钩子，接管剪贴板唤出键（默认 Win+V）。
             //    含 Win 的组合注册不上 RegisterHotKey，只能走钩子；钩子顺带吞掉按键，
@@ -195,6 +232,14 @@ namespace WinKit
                 _showExistingEvent.Reset();
                 Dispatcher.Invoke(() =>
                 {
+                    // 右键「同步到手机」：通道文件里有待推文件 → 只推送，不弹主窗口
+                    var pending = TakeClipSendFiles();
+                    if (pending.Length > 0)
+                    {
+                        ProcessClipSendFiles(pending);
+                        return;
+                    }
+
                     if (_todoWindow != null)
                     {
                         if (!_todoWindow.IsVisible) _todoWindow.Show();
@@ -218,6 +263,81 @@ namespace WinKit
             }
         }
 
+        // ── 右键「同步到手机」参数通道 ──────────────────
+
+        /// <summary>解析 /clipsend 命令行参数（shell 对每个文件起一次进程，每次带一个路径）</summary>
+        private static string[] ParseClipSendArgs(string[] args)
+        {
+            var files = new System.Collections.Generic.List<string>();
+            for (int i = 0; i < args.Length; i++)
+            {
+                if (string.Equals(args[i], "/clipsend", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (i + 1 < args.Length) files.Add(args[++i]);
+                }
+            }
+            return files.Where(f => !string.IsNullOrWhiteSpace(f) && File.Exists(f)).ToArray();
+        }
+
+        /// <summary>取出并清空通道文件里的待推文件路径（多选时多个临时实例追加，主实例一次性合并）</summary>
+        private static string[] TakeClipSendFiles()
+        {
+            try
+            {
+                var path = ShellMenuHelper.ClipSendFilePath;
+                if (!File.Exists(path)) return Array.Empty<string>();
+
+                var lines = File.ReadAllLines(path);
+                File.Delete(path);
+                return lines
+                    .Select(l => l.Trim())
+                    .Where(l => l.Length > 0 && File.Exists(l))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray();
+            }
+            catch
+            {
+                return Array.Empty<string>();
+            }
+        }
+
+        /// <summary>处理右键推送：第一个文件显式推送，其余仅入历史（一期单文件推送）</summary>
+        private void ProcessClipSendFiles(string[] files)
+        {
+            if (files.Length == 0 || _clipboardManager == null || _settingsManager == null) return;
+
+            try
+            {
+                ObtainPushEngine().PushFileNow(files[0]);
+
+                for (int i = 1; i < files.Length; i++)
+                    _clipboardManager.AddFileItem(files[i]);
+
+                if (files.Length > 1)
+                    _trayHelper?.ShowSyncTip($"已推送：{Path.GetFileName(files[0])}（多选仅同步第一个）");
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"WinKit 右键推送失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 取推送引擎：同步开关开着复用现有引擎；关闭时用推送专用实例（不 Start 轮询循环）。
+        /// </summary>
+        private SyncEngine ObtainPushEngine()
+        {
+            if (_syncEngine != null) return _syncEngine;
+
+            if (_pushOnlyEngine == null)
+            {
+                _pushOnlyEngine = new SyncEngine(_clipboardManager!, _settingsManager!);
+                _pushOnlyEngine.SyncSucceeded += OnSyncSucceeded;
+                _pushOnlyEngine.SyncSkipped += OnSyncSucceeded;
+            }
+            return _pushOnlyEngine;
+        }
+
         private void OnClipboardTextChanged(object? sender, string text)
         {
             _clipboardManager?.AddTextItem(text);
@@ -226,6 +346,13 @@ namespace WinKit
         private void OnClipboardImageChanged(object? sender, System.Windows.Media.Imaging.BitmapSource image)
         {
             _clipboardManager?.AddImageItem(image);
+        }
+
+        private void OnClipboardFileChanged(object? sender, string[] files)
+        {
+            // 多文件（Group）一期不做同步，历史里先记录第一个文件
+            if (files.Length > 0)
+                _clipboardManager?.AddFileItem(files[0]);
         }
 
         public void ToggleClipboardFeature(bool enable)
@@ -422,6 +549,62 @@ namespace WinKit
             _translateModule?.SetEnabled(enable);
         }
 
+        /// <summary>
+        /// 启动剪贴板同步引擎（已启动则忽略），并把同步成功事件接到托盘气泡。
+        /// </summary>
+        public void StartSyncEngine()
+        {
+            if (_syncEngine != null) return;
+            if (_clipboardManager == null || _settingsManager == null) return;
+
+            _syncEngine = new SyncEngine(_clipboardManager, _settingsManager);
+            _syncEngine.SyncSucceeded += OnSyncSucceeded;
+            _syncEngine.SyncSkipped += OnSyncSucceeded; // 守门提示同样走气泡
+            _syncEngine.Start();
+        }
+
+        /// <summary>
+        /// 连接参数（URL / 账号 / 密码）变更后重启同步引擎，使 Basic Auth 等配置即时生效。
+        /// 未开启同步时为空操作。
+        /// </summary>
+        public void RestartSyncEngine()
+        {
+            if (_syncEngine == null) return;
+            _syncEngine.Dispose();
+            _syncEngine = null;
+            StartSyncEngine();
+        }
+
+        /// <summary>
+        /// 开启/关闭剪贴板同步（供托盘调用，含配置持久化）。
+        /// </summary>
+        public void ToggleSyncFeature(bool enable)
+        {
+            if (_settingsManager == null) return;
+            var settings = _settingsManager.Settings;
+            settings.SyncEnabled = enable;
+            _settingsManager.SaveSettings(settings);
+
+            if (enable)
+            {
+                StartSyncEngine();
+            }
+            else
+            {
+                _syncEngine?.Dispose();
+                _syncEngine = null;
+            }
+        }
+
+        /// <summary>同步成功 → 托盘气泡提示（事件来自后台线程，切回 UI 线程）</summary>
+        private void OnSyncSucceeded(string message)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                _trayHelper?.ShowSyncTip(message);
+            });
+        }
+
         // ══════════════════════════════════════════════
         //  快捷键录制期间的热键挂起 / 恢复
         // ══════════════════════════════════════════════
@@ -491,6 +674,8 @@ namespace WinKit
             // 优雅释放所有非托管钩子和资源
             _singleInstanceMutex?.Dispose();
             _showExistingEvent?.Dispose();
+            _syncEngine?.Dispose();
+            _pushOnlyEngine?.Dispose();
             _translateModule?.Dispose();
             _captureModule?.Dispose();
             _keyboardHookService?.Dispose();

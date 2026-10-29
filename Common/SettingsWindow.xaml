@@ -457,6 +457,7 @@
                         <ListBoxItem Content="通用"/>
                         <ListBoxItem Content="待办"/>
                         <ListBoxItem Content="剪贴板"/>
+                        <ListBoxItem Content="同步"/>
                         <ListBoxItem Content="截图"/>
                         <ListBoxItem Content="翻译与 OCR"/>
                         <ListBoxItem Content="关于"/>
@@ -676,7 +677,288 @@
                         </StackPanel>
                     </ScrollViewer>
 
-                    <!-- ────────── ④ 截图 ────────── -->
+                    <!-- ────────── ④ 同步（SyncClipboard 协议） ────────── -->
+                    <ScrollViewer x:Name="PageSync"
+                                  Style="{StaticResource NarrowScrollViewer}"
+                                  Padding="24,18,18,18"
+                                  Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="同步" Style="{StaticResource PageTitle}"/>
+
+                            <TextBlock Text="连接" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="服务器地址" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="SyncClipboard 兼容服务器（官方服务器 / WebDAV / CF Worker）" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="SyncUrlBox" Grid.Column="1"
+                                                 Style="{StaticResource FieldBox}"
+                                                 MinWidth="220"
+                                                 LostFocus="SyncUrlBox_Commit"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="用户名" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="HTTP Basic 认证账号" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="SyncUserBox" Grid.Column="1"
+                                                 Style="{StaticResource FieldBox}"
+                                                 MinWidth="220"
+                                                 LostFocus="SyncUserBox_Commit"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="密码" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="明文保存在本机 settings.json" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="SyncPasswordBox" Grid.Column="1"
+                                                 Style="{StaticResource FieldBox}"
+                                                 MinWidth="220"
+                                                 LostFocus="SyncPasswordBox_Commit"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="轮询间隔（秒）" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="1 – 300 秒，改动保存后立即生效，无需重启" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="SyncIntervalBox" Grid.Column="1"
+                                                 Style="{StaticResource NumBox}"
+                                                 PreviewTextInput="NumberOnly_PreviewTextInput"
+                                                 LostFocus="SyncIntervalBox_Commit"
+                                                 KeyDown="NumBox_KeyDown"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="同步内容" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="同步文本" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="纯文本内容的推送与拉取" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="SyncTextToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="SyncTextToggle_Click"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="接收图片" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="远端图片自动写入本机剪贴板与历史；本地图片是否自动推送见下方「推送时机」" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="SyncImageToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="SyncImageToggle_Click"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="接收文件" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="远端文件下载到 sync 目录后写回剪贴板；本地文件是否自动推送见下方「推送时机」" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="SyncFileToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="SyncFileToggle_Click"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="推送时机" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="图片自动推送" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="默认关：复制图片仅入历史，不自动上传；文本始终复制即推" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="SyncAutoPushImageToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="SyncAutoPushImageToggle_Click"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="文件自动推送" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="默认关：复制文件仅入历史；上传文件推荐用下方右键菜单" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="SyncAutoPushFileToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="SyncAutoPushFileToggle_Click"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="集成" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="资源管理器右键菜单" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="右键任意文件「同步到手机」一键上传，无视自动推送开关；HKCU 注册表，无需管理员，程序挪位置后重启自动修正" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="SyncShellMenuToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="SyncShellMenuToggle_Click"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="限制" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="图片推送上限（MB）" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="超出上限的图片不上传，气泡提示" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="SyncImageMaxBox" Grid.Column="1"
+                                                 Style="{StaticResource NumBox}"
+                                                 PreviewTextInput="NumberOnly_PreviewTextInput"
+                                                 LostFocus="SyncImageMaxBox_Commit"
+                                                 KeyDown="NumBox_KeyDown"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="文件推送上限（MB）" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="Cloudflare Workers 默认上限 48MB" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="SyncFileMaxBox" Grid.Column="1"
+                                                 Style="{StaticResource NumBox}"
+                                                 PreviewTextInput="NumberOnly_PreviewTextInput"
+                                                 LostFocus="SyncFileMaxBox_Commit"
+                                                 KeyDown="NumBox_KeyDown"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="文件黑名单" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="扩展名逗号分隔，如 exe,dll,msi；命中则不上传（对齐官方上传黑名单）" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="SyncBlacklistBox" Grid.Column="1"
+                                                 Style="{StaticResource FieldBox}"
+                                                 MinWidth="220"
+                                                 LostFocus="SyncBlacklistBox_Commit"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Text="通知" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="推送成功气泡提示" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="内容推送到远端时托盘气泡提示" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="SyncNotifyPushToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="SyncNotifyPushToggle_Click"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="拉取成功气泡提示" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="从远端收到新内容时托盘气泡提示" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="SyncNotifyPullToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="SyncNotifyPullToggle_Click"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
+
+                            <TextBlock Style="{StaticResource RowHint}" TextWrapping="Wrap" Margin="0,12,0,10"
+                                       Text="同步开关在托盘菜单「剪贴板同步」。文本复制即推；图片/文件默认仅入历史，可用右键菜单「同步到手机」主动上传。协议兼容 SyncClipboard 官方客户端，手机端可用官方 App 连接同一服务器。多文件组（同时复制多个文件）暂不支持自动同步。"/>
+                        </StackPanel>
+                    </ScrollViewer>
+
+                    <!-- ────────── ⑤ 截图 ────────── -->
                     <ScrollViewer x:Name="PageCapture"
                                   Style="{StaticResource NarrowScrollViewer}"
                                   Padding="24,18,18,18"
@@ -726,7 +1008,7 @@
                         </StackPanel>
                     </ScrollViewer>
 
-                    <!-- ────────── ⑤ 翻译与 OCR ────────── -->
+                    <!-- ────────── ⑥ 翻译与 OCR ────────── -->
                     <ScrollViewer x:Name="PageTranslate"
                                   Style="{StaticResource NarrowScrollViewer}"
                                   Padding="24,18,18,18"
@@ -1080,7 +1362,7 @@
                         </StackPanel>
                     </ScrollViewer>
 
-                    <!-- ────────── ⑥ 关于 ────────── -->
+                    <!-- ────────── ⑦ 关于 ────────── -->
                     <ScrollViewer x:Name="PageAbout"
                                   Style="{StaticResource NarrowScrollViewer}"
                                   Padding="24,18,18,18"

@@ -5,6 +5,30 @@
 
 ## [Unreleased]
 
+### Added 新增（剪贴板同步模块，兼容 SyncClipboard 官方协议）
+- **同步引擎**（`Clipboard/Services/SyncEngine.cs`，约 500 行）：对接 [SyncClipboard](https://github.com/Jeric-X/SyncClipboard) 官方协议（`GET/PUT SyncClipboard.json` + `file/*` 端点 + HTTP Basic Auth），服务器端实测兼容 [SyncClipboardCfServer](https://github.com/Leexunhuan743/SyncClipboardCfServer)（Cloudflare Workers 复刻，D1 + R2 + Durable Objects）。文本 / 图片 / 文件三类推拉：
+  - **协议逐字对齐官方源码**（`ProfileDto.cs` + `ImageProfile/FileProfile` + `docs/Hash.md` 三方交叉验证）：文本 hash = `SHA256(UTF8)→大写hex`；**图片/文件的 `hash` 不是内容哈希**，而是 `SHA256("文件名|" + 大写hex(内容SHA256))`，内容哈希单独放 `transferDataHash`；图片远端命名对齐官方 `Image_时间戳.png` 格式——手机端官方客户端可直接混用。
+  - **两步上传**：先 `PUT file/xxx` 传数据，再 `PUT SyncClipboard.json` 换指针，中断不产生悬空引用。文件走流式上传（大文件不整读进内存），下载后校验 `transferDataHash`，损坏即弃。
+  - **防回环双保险**：`_lastPushedHash`/`_lastPulledHash` 双标记（拉取后两者同步更新）；图片因 `SetImage` 重编码后字节必变、hash 守不住，改用**历史条目 Id** 守门。
+  - **轮询 + Nudge**：默认 5 秒轮询（2 台设备约 3.5 万请求/天，CF 免费额度 10 万/天内）；`Nudge()` 允许显式推送后立即触发一轮，不等轮询。
+  - 全部网络异常静默跳过、下轮重试；UI 线程操作（`Clipboard.SetText/SetImage`、历史入库）经 `Dispatcher.InvokeAsync` 切回 STA。
+- **推送时机分级（用户决策：复制即推只保留文本）**：文本复制即推（默认开）；**图片/文件复制仅入历史不上传**（`SyncAutoPushImage` / `SyncAutoPushFile` 默认关，设置页可开回）。显式推送（右键）无视一切开关与黑名单，仅大小上限仍拦——用户主动点的就是要传。
+- **资源管理器右键菜单**（`Common/ShellMenuHelper.cs`）：`HKCU\...\Directory\shell\WinKitSync` 注册表方案（无需管理员、零 shell DLL），菜单名「同步到手机（WinKit）」。点击后 `WinKit.exe /clipsend` 临时进程把文件路径写入 `clipsend.txt` 临时文件 + 唤醒主实例即退出；主实例复用单实例唤醒事件通道，在 `WatchShowEvent` 中区分「唤醒」与「传文件」（后者不弹待办窗）。**启动时自动刷新注册表中的 exe 绝对路径**，exe 挪位置不失效。
+- **显式推送通道**：`SyncEngine.PushFileNow()` 创建**推送专用临时 SyncEngine**（不依赖总开关——「剪贴板同步」关着也能右键推）；多选文件一期只推第一个并气泡提示（官方 Group/zip 属二期）；右键图片文件（jpg/png 等）按 Image 类型推，手机端直接进剪贴板显示而非当文件保存。
+- **剪贴板文件支持**：`ClipboardItem` +`File` 类型（`FilePath` 字段，`DisplayText` 显示 `📄 文件名`，历史窗口数据模板绑定自动适配零改动）；`ClipboardManager.AddFileItem()` 入库；`ClipboardService` +`FileChanged` 事件（`FileDropList` 监听，与文本/图片互斥判定同轮询环）；`AppPaths` +`Sync` 下载目录（`%APPDATA%/WinKit/sync/`）。
+- **设置中心新增「同步」分区**（6 分区 → 7 分区，插在「剪贴板」后）：连接（服务器/用户名/密码/轮询间隔，**连接参数变更热重启引擎**，不再手改 json）、同步内容（同步文本 / 接收图片 / 接收文件——后两个含义收窄为**仅拉取方向**）、推送时机（图片/文件自动推送，默认全关）、集成（右键菜单开关）、限制（图片 20MB / 文件 48MB 上限——对齐 CF Worker 48MiB，文件扩展名黑名单）、通知（推送/拉取气泡各自开关，走 `NotifyIcon.ShowBalloonTip` 2 秒自动消失）。
+- 托盘菜单新增顶级「剪贴板同步」勾选开关（总开关：关 = 完全不连服务器，右键推送也不可用）。
+
+### Changed 变更
+- **推送语义修正**：自动推送只看 `Items[0]`（当前剪贴板最新项），废弃旧实现「翻历史找最近文本」（会误推旧内容），与官方单槽语义一致。
+- `Common/AppSettings.cs`：+14 个 `Sync*` 配置字段（总开关 / 连接三件套 / 轮询间隔 / 类型开关 / 自动推送 / 上限 / 黑名单 / 通知）。
+- `Common/SettingsWindow.xaml(.cs)`：导航与分区索引整体后移；同步页走现有 `RowLabel`/`RowHint` 分组样式。
+- `App.xaml.cs`：`/clipsend` 参数解析（必须在单实例判定**之前**读出参数再决定信号语义）、`StartSyncEngine`/`ToggleSyncFeature`/`RestartSyncEngine`、OnExit 释放两处引擎（常驻 + 临时）。
+
+### 开发期踩坑（记录进 AGENTS.md）
+- WPF + WinForms 混合下 `Application`/`Clipboard` 命名空间歧义（CS0104），且项目自身命名空间 `WinKit.Clipboard` 会**遮蔽** `System.Windows.Clipboard`（CS0234）——同步引擎内一律用完全限定名。
+- 构建报 MSB3027 文件锁（WinKit 正在运行）→ 结束进程重建，数据全落盘无损失。
+
 ## [2.2.0] — 2026-10-27
 
 ### Added 新增（自上游 li5bo5/WinKit v2.11 移植）

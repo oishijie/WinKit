@@ -115,6 +115,55 @@ namespace WinKit.Common
         /// <summary>图片缓存容量上限（MB），超出后折半淘汰最旧的一半（默认 100MB）</summary>
         public int ClipboardImageMaxStorageMB { get; set; } = 100;
 
+        // ── Clipboard 剪贴板同步（SyncClipboard 协议）────
+        /// <summary>是否启用剪贴板同步（默认关闭）</summary>
+        public bool SyncEnabled { get; set; } = false;
+
+        /// <summary>SyncClipboard 兼容服务器地址，如 https://clip.cro.cc.cd（不以 / 结尾）</summary>
+        public string SyncUrl { get; set; } = string.Empty;
+
+        /// <summary>服务器用户名（HTTP Basic 认证）</summary>
+        public string SyncUser { get; set; } = string.Empty;
+
+        /// <summary>服务器密码（HTTP Basic 认证）</summary>
+        public string SyncPassword { get; set; } = string.Empty;
+
+        /// <summary>轮询间隔毫秒（默认 5000，最低 1000；对齐官方客户端探活节奏）</summary>
+        public int SyncIntervalMs { get; set; } = 5000;
+
+        /// <summary>同步文本类型（默认开）</summary>
+        public bool SyncText { get; set; } = true;
+
+        /// <summary>接收图片（远端 → 本地拉取；默认开）。本地图片是否自动推送见 SyncAutoPushImage</summary>
+        public bool SyncImage { get; set; } = true;
+
+        /// <summary>接收文件（远端 → 本地拉取；默认关）。本地文件是否自动推送见 SyncAutoPushFile</summary>
+        public bool SyncFile { get; set; } = false;
+
+        /// <summary>复制图片后自动推送（默认关：复制仅入历史，可用右键菜单显式推送）</summary>
+        public bool SyncAutoPushImage { get; set; } = false;
+
+        /// <summary>复制文件后自动推送（默认关：复制仅入历史，可用右键菜单显式推送）</summary>
+        public bool SyncAutoPushFile { get; set; } = false;
+
+        /// <summary>资源管理器右键「同步到手机」菜单（HKCU 注册表；默认关）</summary>
+        public bool SyncShellMenu { get; set; } = false;
+
+        /// <summary>图片推送大小上限（MB），超出跳过推送并气泡提示（默认 20）</summary>
+        public int SyncImageMaxMB { get; set; } = 20;
+
+        /// <summary>文件推送大小上限（MB），对齐 Cloudflare Workers 默认上限（默认 48）</summary>
+        public int SyncFileMaxMB { get; set; } = 48;
+
+        /// <summary>文件黑名单扩展名，逗号分隔（如 exe,dll,msi），命中则不上传（对齐官方上传黑名单；空 = 不过滤）</summary>
+        public string SyncFileBlacklist { get; set; } = string.Empty;
+
+        /// <summary>推送成功时气泡提示（默认开）</summary>
+        public bool SyncNotifyPush { get; set; } = true;
+
+        /// <summary>拉取成功时气泡提示（默认开）</summary>
+        public bool SyncNotifyPull { get; set; } = true;
+
         // ── Translate 翻译 & OCR 设置 ───────────────────
         /// <summary>是否启用翻译/OCR 模块及其全局热键</summary>
         public bool TranslateEnable { get; set; } = true;

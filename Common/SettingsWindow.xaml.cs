@@ -25,6 +25,7 @@ namespace WinKit.Common
         public const string SectionGeneral = "general";
         public const string SectionTodo = "todo";
         public const string SectionClipboard = "clipboard";
+        public const string SectionSync = "sync";
         public const string SectionCapture = "capture";
         public const string SectionTranslate = "translate";
         public const string SectionAbout = "about";
@@ -94,9 +95,10 @@ namespace WinKit.Common
                 {
                     SectionTodo => 1,
                     SectionClipboard => 2,
-                    SectionCapture => 3,
-                    SectionTranslate => 4,
-                    SectionAbout => 5,
+                    SectionSync => 3,
+                    SectionCapture => 4,
+                    SectionTranslate => 5,
+                    SectionAbout => 6,
                     _ => 0,
                 };
             }
@@ -153,6 +155,23 @@ namespace WinKit.Common
                 UpdateClipCount();
                 ClipDetailCard.IsEnabled = s.PasteEnableMonitoring;
                 ClipHotkeyCard.IsEnabled = s.PasteEnableMonitoring;
+
+                // ④ 同步
+                SyncUrlBox.Text = s.SyncUrl ?? "";
+                SyncUserBox.Text = s.SyncUser ?? "";
+                SyncPasswordBox.Text = s.SyncPassword ?? "";
+                SyncIntervalBox.Text = Clamp(s.SyncIntervalMs / 1000, 1, 300).ToString();
+                SyncTextToggle.IsChecked = s.SyncText;
+                SyncImageToggle.IsChecked = s.SyncImage;
+                SyncFileToggle.IsChecked = s.SyncFile;
+                SyncImageMaxBox.Text = Clamp(s.SyncImageMaxMB, 1, 48).ToString();
+                SyncFileMaxBox.Text = Clamp(s.SyncFileMaxMB, 1, 48).ToString();
+                SyncBlacklistBox.Text = s.SyncFileBlacklist ?? "";
+                SyncNotifyPushToggle.IsChecked = s.SyncNotifyPush;
+                SyncNotifyPullToggle.IsChecked = s.SyncNotifyPull;
+                SyncAutoPushImageToggle.IsChecked = s.SyncAutoPushImage;
+                SyncAutoPushFileToggle.IsChecked = s.SyncAutoPushFile;
+                SyncShellMenuToggle.IsChecked = s.SyncShellMenu || ShellMenuHelper.IsInstalled();
 
                 // ④ 截图
                 CaptureAutoCopyToggle.IsChecked = s.CaptureAutoCopy;
@@ -580,13 +599,14 @@ namespace WinKit.Common
             PageGeneral.Visibility = index == 0 ? Visibility.Visible : Visibility.Collapsed;
             PageTodo.Visibility = index == 1 ? Visibility.Visible : Visibility.Collapsed;
             PageClipboard.Visibility = index == 2 ? Visibility.Visible : Visibility.Collapsed;
-            PageCapture.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
-            PageTranslate.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
-            PageAbout.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
+            PageSync.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
+            PageCapture.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
+            PageTranslate.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
+            PageAbout.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
 
             if (index == 2) UpdateClipCount();
-            if (index == 4) RefreshOcrHistory();   // 识别历史按需重建，避免每次改设置都全量查询
-            if (index == 5) RefreshOcrStatus();
+            if (index == 5) RefreshOcrHistory();   // 识别历史按需重建，避免每次改设置都全量查询
+            if (index == 6) RefreshOcrStatus();
         }
 
         private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -711,6 +731,140 @@ namespace WinKit.Common
 
             CurrentApp?.ClipboardManager?.ClearAll();
             UpdateClipCount();
+        }
+
+        // ── ④ 同步 ──────────────────────────────────────
+
+        private void SyncUrlBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            var s = _settingsManager.Settings;
+            var value = SyncUrlBox.Text.Trim().TrimEnd('/');
+            if (value == s.SyncUrl) return;
+            s.SyncUrl = value;
+            Save();
+            CurrentApp?.RestartSyncEngine(); // 连接参数热生效
+        }
+
+        private void SyncUserBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            var s = _settingsManager.Settings;
+            if (SyncUserBox.Text == s.SyncUser) return;
+            s.SyncUser = SyncUserBox.Text.Trim();
+            Save();
+            CurrentApp?.RestartSyncEngine();
+        }
+
+        private void SyncPasswordBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            var s = _settingsManager.Settings;
+            if (SyncPasswordBox.Text == s.SyncPassword) return;
+            s.SyncPassword = SyncPasswordBox.Text;
+            Save();
+            CurrentApp?.RestartSyncEngine();
+        }
+
+        private void SyncIntervalBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            int seconds = CommitNumber(SyncIntervalBox, _settingsManager.Settings.SyncIntervalMs / 1000, 1, 300);
+            int ms = seconds * 1000;
+            if (ms == _settingsManager.Settings.SyncIntervalMs) return;
+            _settingsManager.Settings.SyncIntervalMs = ms;
+            Save(); // 引擎每轮读间隔，自动生效
+        }
+
+        private void SyncTextToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.SyncText = SyncTextToggle.IsChecked == true;
+            Save();
+        }
+
+        private void SyncImageToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.SyncImage = SyncImageToggle.IsChecked == true;
+            Save();
+        }
+
+        private void SyncFileToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.SyncFile = SyncFileToggle.IsChecked == true;
+            Save();
+        }
+
+        private void SyncAutoPushImageToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.SyncAutoPushImage = SyncAutoPushImageToggle.IsChecked == true;
+            Save();
+        }
+
+        private void SyncAutoPushFileToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.SyncAutoPushFile = SyncAutoPushFileToggle.IsChecked == true;
+            Save();
+        }
+
+        private void SyncShellMenuToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            bool enable = SyncShellMenuToggle.IsChecked == true;
+            _settingsManager.Settings.SyncShellMenu = enable;
+            Save();
+
+            var exePath = Environment.ProcessPath;
+            if (enable && !string.IsNullOrEmpty(exePath))
+                ShellMenuHelper.Install(exePath);
+            else
+                ShellMenuHelper.Uninstall();
+        }
+
+        private void SyncImageMaxBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            int value = CommitNumber(SyncImageMaxBox, _settingsManager.Settings.SyncImageMaxMB, 1, 48);
+            if (value == _settingsManager.Settings.SyncImageMaxMB) return;
+            _settingsManager.Settings.SyncImageMaxMB = value;
+            Save();
+        }
+
+        private void SyncFileMaxBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            int value = CommitNumber(SyncFileMaxBox, _settingsManager.Settings.SyncFileMaxMB, 1, 48);
+            if (value == _settingsManager.Settings.SyncFileMaxMB) return;
+            _settingsManager.Settings.SyncFileMaxMB = value;
+            Save();
+        }
+
+        private void SyncBlacklistBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            var s = _settingsManager.Settings;
+            var value = SyncBlacklistBox.Text.Trim();
+            if (value == s.SyncFileBlacklist) return;
+            s.SyncFileBlacklist = value;
+            Save();
+        }
+
+        private void SyncNotifyPushToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.SyncNotifyPush = SyncNotifyPushToggle.IsChecked == true;
+            Save();
+        }
+
+        private void SyncNotifyPullToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.SyncNotifyPull = SyncNotifyPullToggle.IsChecked == true;
+            Save();
         }
 
         private void UpdateClipCount()

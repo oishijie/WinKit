@@ -235,6 +235,45 @@ namespace WinKit.Clipboard.Services
             return ComputeDataHash(bytes);
         }
 
+        /// <summary>
+        /// 添加文件类型剪贴板项（复制文件时调用）。
+        /// Content 存文件完整路径；ContentHash 用轻量指纹（大小+修改时间）避免为大文件做全量哈希。
+        /// </summary>
+        public void AddFileItem(string fullPath)
+        {
+            if (string.IsNullOrWhiteSpace(fullPath) || !File.Exists(fullPath)) return;
+
+            try
+            {
+                var info = new FileInfo(fullPath);
+                // 与最新项去重：同路径直接跳过
+                if (_items.Count > 0 && _items[0].Type == ClipboardItemType.File &&
+                    string.Equals(_items[0].Content, fullPath, StringComparison.OrdinalIgnoreCase))
+                    return;
+
+                var item = new ClipboardItem
+                {
+                    Type = ClipboardItemType.File,
+                    Content = fullPath,
+                    ContentHash = $"f|{info.Length}|{info.LastWriteTimeUtc.Ticks}",
+                    Timestamp = DateTime.Now
+                };
+
+                InsertItemToDb(item);
+                _items.Insert(0, item);
+
+                if (++_insertsSinceCleanup >= CleanupThrottle)
+                {
+                    CleanupOldData();
+                    _insertsSinceCleanup = 0;
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ClipboardManager: 文件项添加失败 - {ex.Message}");
+            }
+        }
+
         /// <summary>对原始字节计算 SHA256 内容哈希（图片去重 / 文本去重共用，线程安全：每次新建实例）</summary>
         private static string ComputeDataHash(byte[] data)
         {

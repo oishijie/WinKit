@@ -7,12 +7,19 @@
 
 ---
 
-## 当前基线（v2.1.3 + Unreleased）
+## 当前基线（v2.2.0 + Unreleased：剪贴板同步）
 
 已落地：四大功能模块（TodoList / 剪贴板历史 / 截图标注 / 本地 OCR 翻译）、快捷键全面可配置（单一数据源 `HotkeyCatalog`）、OCR 引擎 ONNX Runtime（分发包 44MB）、识别历史、深色反色、单实例保护、DPAPI 加密。
-上游移植：FastClipboard、待办回收站、图片缓存生命周期清理（详见 `CHANGELOG.md` Unreleased 段）。
+上游移植：FastClipboard、待办回收站、图片缓存生命周期清理（详见 `CHANGELOG.md` 2.2.0 段）。
+**新增（Unreleased）：剪贴板同步模块** —— 兼容 SyncClipboard 官方协议的文本/图片/文件推拉，服务器用 SyncClipboardCfServer（CF Workers）；推送时机分级（文本自动推、图片/文件默认仅入历史）、资源管理器右键显式推送、设置中心「同步」分区（7 分区）。详见 `CHANGELOG.md` Unreleased 段。
 
 ## 近期（下一版目标）
+
+### 0. 剪贴板同步二期
+- [ ] **Group 多文件同步**（官方 zip 打包语义）：当前多选只推第一个 + 气泡提示；右键多选合并推送是最高频缺口
+- [ ] 拉取图片质量优化：`SetImage` 写回经 WPF 重编码，字节与远端不一致（已用条目 Id 守门兜底）；可评估直接保存原始字节 + `SetFileDropList` 双格式写入
+- [ ] 同步状态可视化：设置页显示上次同步时间 / 最近错误（当前全静默，排障靠猜）
+- [ ] 失败重试退避：连续失败时拉长轮询间隔，避免服务器异常时空转（当前固定间隔硬轮询）
 
 ### 1. 待办回收站收尾
 - [ ] 设置中心「待办」分区暴露「回收站保留天数」（`RecycleBinRetentionDays` 已就位，缺 UI）
@@ -49,6 +56,7 @@
 - ❌ GitHub Actions 相关的一切（用户账号红线，见 AGENTS.md）
 - ❌ Paddle 系引擎回退（体积死局，见 AGENTS.md「发布体积约束」）
 - ❌ Todo 存储从 Markdown 换回 JSON（多端同步是核心魔改点，`MarkdownStorage` 保留）
+- ❌ 同步上传快捷键（用户决策 2026-10-29：显式通道只有右键菜单，快捷键与「复制即推」语义重叠，不加）
 
 ---
 

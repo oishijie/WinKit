@@ -31,6 +31,11 @@ namespace WinKit.Common
         public static readonly string Images = Path.Combine(AppData, "images");
 
         /// <summary>
+        /// 同步文件下载目录 (%APPDATA%/WinKit/sync/) —— 远端推送来的文件落在这里
+        /// </summary>
+        public static readonly string SyncDir = Path.Combine(AppData, "sync");
+
+        /// <summary>
         /// 待办回收站存储路径（recyclebin.jsonl，JSON Lines 明文）
         /// </summary>
         public static readonly string RecycleBin = Path.Combine(AppData, "recyclebin.jsonl");
@@ -57,6 +62,10 @@ namespace WinKit.Common
             if (!Directory.Exists(Images))
             {
                 Directory.CreateDirectory(Images);
+            }
+            if (!Directory.Exists(SyncDir))
+            {
+                Directory.CreateDirectory(SyncDir);
             }
         }
     }

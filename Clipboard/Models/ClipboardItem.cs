@@ -9,7 +9,8 @@ namespace WinKit.Clipboard.Models
     public enum ClipboardItemType
     {
         Text,
-        Image
+        Image,
+        File
     }
 
     /// <summary>
@@ -25,6 +26,15 @@ namespace WinKit.Clipboard.Models
 
         /// <summary>是否为图片类型（供 XAML DataTrigger 绑定）</summary>
         public bool IsImage => Type == ClipboardItemType.Image;
+
+        /// <summary>是否为文件类型（供 XAML DataTrigger 绑定）</summary>
+        public bool IsFile => Type == ClipboardItemType.File;
+
+        /// <summary>
+        /// 文件的绝对路径（仅 Type=File 时有效；Content 直接存完整路径）
+        /// </summary>
+        public string? FilePath =>
+            Type == ClipboardItemType.File && !string.IsNullOrEmpty(Content) ? Content : null;
 
         /// <summary>
         /// 图片文件的绝对路径（仅 Type=Image 时有效）
@@ -49,11 +59,18 @@ namespace WinKit.Clipboard.Models
         {
             get
             {
-                if (Type == ClipboardItemType.Image)
-                {
-                    var exists = ImagePath != null && File.Exists(ImagePath);
-                    return exists ? "🖼 图片" : "🖼 图片（已失效）";
-                }
+            if (Type == ClipboardItemType.Image)
+            {
+                var exists = ImagePath != null && File.Exists(ImagePath);
+                return exists ? "🖼 图片" : "🖼 图片（已失效）";
+            }
+
+            if (Type == ClipboardItemType.File)
+            {
+                var name = string.IsNullOrEmpty(Content) ? "文件" : System.IO.Path.GetFileName(Content);
+                var ok = File.Exists(Content);
+                return ok ? $"📄 {name}" : $"📄 {name}（已失效）";
+            }
 
                 var text = Content ?? string.Empty;
                 // 去除首尾多余空白字符
@@ -76,6 +93,11 @@ namespace WinKit.Clipboard.Models
                 if (Type == ClipboardItemType.Image && ImagePath != null && File.Exists(ImagePath))
                 {
                     try { return new FileInfo(ImagePath).Length; }
+                    catch { return 0; }
+                }
+                if (Type == ClipboardItemType.File && FilePath != null && File.Exists(FilePath))
+                {
+                    try { return new FileInfo(FilePath).Length; }
                     catch { return 0; }
                 }
                 return Content?.Length * 2 ?? 0; // UTF-16 characters
