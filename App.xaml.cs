@@ -599,7 +599,7 @@ namespace WinKit
         }
 
         /// <summary>
-        /// 完整更新流程：三源探测 → 版本判断 →（按开关）后台下载 → 气泡反馈。
+        /// 完整更新流程：多源探测版本 → 版本判断 →（按开关）后台下载（下载前镜像测速选最快）→ 气泡反馈。
         /// manual=true 时结果无论有无更新都气泡告知；静默模式只在有更新或下载完成时提示。
         /// </summary>
         public async Task RunUpdateFlowAsync(bool manual)
@@ -612,7 +612,7 @@ namespace WinKit
 
             if (!r.Probed)
             {
-                if (manual) _trayHelper?.ShowTip("WinKit 更新", "检查失败：三个源均不可达");
+                if (manual) _trayHelper?.ShowTip("WinKit 更新", "检查失败：各源均不可达（检查网络）");
                 return;
             }
 

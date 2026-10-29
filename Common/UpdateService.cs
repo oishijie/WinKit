@@ -37,27 +37,28 @@ namespace WinKit.Common
     }
 
     /// <summary>
-    /// 自动更新服务 — 三源（Gitee / GitHub / CNB）并发探测，取版本最高的成功源。
+    /// 自动更新服务 — 多源并发探测版本 + 下载前镜像测速选最快源。
     ///
-    /// 三源探测方式（2026-10-29 全部实测匿名可达）：
-    ///  ① Gitee  GET api/v5/releases/latest（匿名 200，0.65s）→ tag_name + assets 直链；
-    ///  ② GitHub HEAD releases/latest 302 重定向（绕开匿名 API 403）→ Location 解析 tag，
-    ///    资产走 releases/download/{tag}/ 固定命名；
-    ///  ③ CNB    raw/master/latest.json 自维护清单（匿名 200，0.68s；CNB release API 匿名 401 不可用）。
+    /// 版本探测（2026-10-29 实测匿名可达的两条路）：
+    ///  ① Gitee  GET api/v5/releases/latest（匿名 200，0.45s）→ tag_name + assets 直链；
+    ///  ② GitHub HEAD releases/latest 302 重定向（绕开匿名 API 403）→ Location 解析 tag。
+    ///  ⚠️ CNB 不能做版本探测：其 release API 与 git/raw 文件接口**匿名一律 401**（公共仓库也一样），
+    ///     网页 `/-/raw/` 返回 SPA 的 "Page not found" HTML（HTTP 200 但非 JSON）。因此 CNB 只作**下载镜像**。
     ///
-    /// 选源规则：只认「探测成功」的源，取其中版本最高者（避免最快的源落后未同步导致误判无更新），
-    /// 版本并列取延迟最低。下载 HttpClient 流式写盘，失败静默（与 SyncEngine 同一容错风格）。
+    /// 下载选源：三个镜像（Gitee / GitHub / CNB）用 Range 请求并发测 TTFB，取最快可用的那个下载。
+    /// 版本选源规则：只认探测成功的源，取版本最高者（避免「最快的源未同步发版」误判无更新），并列取延迟最低。
     /// </summary>
     public class UpdateService
     {
-        // ── 三源地址（发版时同步维护，见 AGENTS.md「发版约定」）────────────
+        // ── 各源地址（发版时同步维护，见 AGENTS.md「发版约定」）────────────
         private const string GiteeApiUrl = "https://gitee.com/api/v5/repos/worhllo/WinKit/releases/latest";
         private const string GiteeDownloadBase = "https://gitee.com/worhllo/WinKit/releases/download/{0}/WinKit-{0}-win-x64.zip";
         private const string GitHubLatestUrl = "https://github.com/oishijie/WinKit/releases/latest";
         private const string GitHubDownloadFmt = "https://github.com/oishijie/WinKit/releases/download/{0}/WinKit-{0}-win-x64.zip";
-        private const string CnbManifestUrl = "https://cnb.cool/wordoi.rlc/winkit-customer/-/raw/master/latest.json";
+        private const string CnbDownloadFmt = "https://cnb.cool/wordoi.rlc/winkit-customer/-/releases/download/{0}/WinKit-{0}-win-x64.zip";
 
         private static readonly TimeSpan ProbeTimeout = TimeSpan.FromMilliseconds(1500);
+        private static readonly TimeSpan MirrorTimeout = TimeSpan.FromMilliseconds(2500);
 
         private readonly HttpClient _http;
 
@@ -83,15 +84,14 @@ namespace WinKit.Common
         }
 
         /// <summary>
-        /// 三源并发探测并汇总结果。网络异常静默，全失败时 Probed=false。
+        /// 多源并发探测并汇总结果。网络异常静默，全失败时 Probed=false。
         /// </summary>
         public async Task<UpdateCheckResult> CheckAsync()
         {
             var gitee = ProbeGiteeAsync();
             var github = ProbeGitHubAsync();
-            var cnb = ProbeCnbAsync();
 
-            var probes = new[] { await gitee, await github, await cnb };
+            var probes = new[] { await gitee, await github };
             var ok = new List<UpdateSourceProbe>();
             foreach (var p in probes)
             {
@@ -101,7 +101,7 @@ namespace WinKit.Common
             var result = new UpdateCheckResult { CurrentVersion = CurrentVersion };
             if (ok.Count == 0)
             {
-                Message?.Invoke("更新检查失败：三个源均不可达（检查网络）");
+                Message?.Invoke("更新检查失败：各源均不可达（检查网络）");
                 return result;
             }
 
@@ -144,7 +144,8 @@ namespace WinKit.Common
         {
             try
             {
-                var url = downloadUrl ?? string.Format(GiteeDownloadBase, tag);
+                // 下载前对三个镜像并发测速（Range 请求取 TTFB），选最快可用的；全失败回退调用方给的地址
+                var url = await PickFastestMirrorAsync(tag, downloadUrl).ConfigureAwait(false);
                 var fileName = $"WinKit-{tag}-win-x64.zip";
                 var target = Path.Combine(Path.GetTempPath(), fileName);
 
@@ -173,7 +174,7 @@ namespace WinKit.Common
             }
         }
 
-        // ── 三源探测实现 ──────────────────────────────────────────────
+        // ── 版本探测实现 ──────────────────────────────────────────────
 
         /// <summary>Gitee：api/v5 匿名 200，响应含 tag_name 与 assets[].browser_download_url</summary>
         private async Task<UpdateSourceProbe> ProbeGiteeAsync()
@@ -224,29 +225,43 @@ namespace WinKit.Common
             return probe;
         }
 
-        /// <summary>CNB：release API 匿名 401，改用仓库内自维护 latest.json（随发版更新）</summary>
-        private async Task<UpdateSourceProbe> ProbeCnbAsync()
+        /// <summary>
+        /// 三个下载镜像并发测速（Range 请求 0-0 只取 1 字节，测到首字节即算通），返回最快的可用 URL。
+        /// 全部失败时回退 preferred（调用方传入的探测源直链），再回退 Gitee 固定命名。
+        /// </summary>
+        private async Task<string> PickFastestMirrorAsync(string tag, string? preferred)
         {
-            var probe = new UpdateSourceProbe { Name = "CNB" };
-            var sw = Stopwatch.StartNew();
-            try
+            var candidates = new List<string>();
+            if (!string.IsNullOrEmpty(preferred)) candidates.Add(preferred);
+            candidates.Add(string.Format(GiteeDownloadBase, tag));
+            candidates.Add(string.Format(CnbDownloadFmt, tag));
+            candidates.Add(string.Format(GitHubDownloadFmt, tag));
+
+            var tasks = candidates.Distinct().Select(async url =>
             {
-                using var cts = new CancellationTokenSource(ProbeTimeout);
-                var json = await _http.GetStringAsync(CnbManifestUrl, cts.Token);
-                using var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("tag", out var tag))
+                var sw = Stopwatch.StartNew();
+                try
                 {
-                    probe.Tag = tag.GetString();
-                    if (doc.RootElement.TryGetProperty("downloadUrl", out var du))
-                    {
-                        probe.DownloadUrl = du.GetString();
-                    }
-                    probe.Success = !string.IsNullOrEmpty(probe.Tag);
+                    using var cts = new CancellationTokenSource(MirrorTimeout);
+                    using var req = new HttpRequestMessage(HttpMethod.Get, url);
+                    req.Headers.Range = new System.Net.Http.Headers.RangeHeaderValue(0, 0);
+                    using var resp = await _http.SendAsync(req, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+                    var code = (int)resp.StatusCode;
+                    if (code == 200 || code == 206)
+                        return (Url: url, Ok: true, Ms: sw.Elapsed.TotalMilliseconds);
                 }
+                catch { /* 该镜像不可用 */ }
+                return (Url: url, Ok: false, Ms: double.MaxValue);
+            }).ToArray();
+
+            var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+            var best = results.Where(r => r.Ok).OrderBy(r => r.Ms).FirstOrDefault();
+            if (best.Ok && !string.IsNullOrEmpty(best.Url))
+            {
+                Debug.WriteLine($"UpdateService 镜像测速最优：{best.Url} ({best.Ms:F0}ms)");
+                return best.Url;
             }
-            catch { probe.Success = false; }
-            probe.LatencyMs = sw.Elapsed.TotalMilliseconds;
-            return probe;
+            return preferred ?? string.Format(GiteeDownloadBase, tag);
         }
     }
 }

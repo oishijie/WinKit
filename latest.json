@@ -6,5 +6,5 @@
   "downloadUrl": "https://gitee.com/worhllo/WinKit/releases/download/v2.3.0/WinKit-v2.3.0-win-x64.zip",
   "mirror": "https://github.com/oishijie/WinKit/releases/download/v2.3.0/WinKit-v2.3.0-win-x64.zip",
   "cnb": "https://cnb.cool/wordoi.rlc/winkit-customer/-/releases/download/v2.3.0/WinKit-v2.3.0-win-x64.zip",
-  "note": "WinKit 自动更新版本清单（CNB 源）。CNB release API 匿名不可用（401），故用本 raw 文件做版本探测；downloadUrl 指向 Gitee（国内最快），mirror=GitHub 备用，cnb=CNB 附件。发新版本时同步更新本文件并推送仓库。"
+  "note": "WinKit 发布镜像清单（供人或脚本取用，程序自动更新不读取本文件：版本探测走 Gitee API + GitHub 302，下载时对 Gitee/GitHub/CNB 三镜像并发测速选最快）。CNB 的 release API 与 git/raw 文件接口匿名一律 401，故不能作为公开探测源。发新版本时同步更新本文件并推送仓库。"
 }

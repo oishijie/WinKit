@@ -165,7 +165,7 @@ namespace WinKit.Common
         public bool SyncNotifyPull { get; set; } = true;
 
         // ── Update 自动更新设置 ─────────────────────────
-        /// <summary>自动检查更新：启动后每日静默检查一次，三源择优（默认开）</summary>
+        /// <summary>自动检查更新：启动后每日静默检查一次，多源择优（默认开）</summary>
         public bool UpdateAutoCheck { get; set; } = true;
 
         /// <summary>自动下载更新包：发现新版本即后台下载，关 = 仅气泡提示版本号（默认关）</summary>

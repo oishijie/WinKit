@@ -548,7 +548,7 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                                             <TextBlock Text="自动检查更新" Style="{StaticResource RowLabel}"/>
-                                            <TextBlock Text="启动后每日静默检查一次，Gitee / GitHub / CNB 三源择优" Style="{StaticResource RowHint}"/>
+                                            <TextBlock Text="启动后每日静默检查一次；Gitee / GitHub 探测版本，下载时对 Gitee / GitHub / CNB 三镜像测速选最快" Style="{StaticResource RowHint}"/>
                                         </StackPanel>
                                         <CheckBox x:Name="UpdateAutoCheckToggle" Grid.Column="1"
                                                   Style="{StaticResource ToggleSwitch}"
