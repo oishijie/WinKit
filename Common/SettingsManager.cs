@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text;
 using System.Text.Json;
@@ -18,6 +19,16 @@ namespace WinKit.Common
 
         public event EventHandler<AppSettings>? SettingsChanged;
 
+        /// <summary>
+        /// 需要 DPAPI 加密落盘的敏感字段名。加密与解密共用同一份清单，
+        /// 新增敏感配置时只改这里，避免保存/加载两边不同步。
+        /// </summary>
+        private static readonly HashSet<string> SensitiveFields = new(StringComparer.Ordinal)
+        {
+            "OpenAIApiKey",   // OpenAI 兼容接口的 API Key
+            "SyncPassword"    // 剪贴板同步服务器密码（HTTP Basic）
+        };
+
         public SettingsManager()
         {
             AppPaths.EnsureDirectories();
@@ -26,7 +37,7 @@ namespace WinKit.Common
         }
 
         /// <summary>
-        /// 保存设置。敏感字段（API Key）在序列化前用 DPAPI 加密，
+        /// 保存设置。敏感字段（见 <see cref="SensitiveFields"/>）在序列化前用 DPAPI 加密，
         /// 内存中的 _settings 始终保持明文，不影响调用方。
         /// </summary>
         public void SaveSettings(AppSettings newSettings)
@@ -38,7 +49,7 @@ namespace WinKit.Common
                 var options = new JsonSerializerOptions { WriteIndented = true };
                 var json = JsonSerializer.Serialize(_settings, options);
 
-                // 将 JSON 中的明文 API Key 替换为 DPAPI 密文
+                // 将 JSON 中的明文敏感字段替换为 DPAPI 密文
                 using var doc = JsonDocument.Parse(json);
                 using var stream = new MemoryStream();
                 using (var writer = new Utf8JsonWriter(stream, new JsonWriterOptions { Indented = true }))
@@ -46,8 +57,8 @@ namespace WinKit.Common
                     writer.WriteStartObject();
                     foreach (var prop in doc.RootElement.EnumerateObject())
                     {
-                        // API Key（OpenAI 兼容）序列化前用 DPAPI 加密落盘
-                        if (prop.Name == "OpenAIApiKey")
+                        // 敏感字段（API Key / 同步密码）序列化前用 DPAPI 加密落盘
+                        if (SensitiveFields.Contains(prop.Name))
                         {
                             var plain = prop.Value.GetString() ?? "";
                             writer.WriteString(prop.Name, SecureStringHelper.Encrypt(plain));
@@ -84,23 +95,19 @@ namespace WinKit.Common
                     var settings = JsonSerializer.Deserialize<AppSettings>(json);
                     if (settings != null)
                     {
-                        // 解密 API Key（OpenAI 兼容）
-                        if (!string.IsNullOrEmpty(settings.OpenAIApiKey))
+                        // 解密敏感字段（API Key / 同步密码）
+                        // 任一字段解不开 → 视为旧版明文，保留原值并后台重新加密保存
+                        var needMigration = false;
+                        needMigration |= TryDecryptField(settings.OpenAIApiKey, v => settings.OpenAIApiKey = v);
+                        needMigration |= TryDecryptField(settings.SyncPassword, v => settings.SyncPassword = v);
+
+                        if (needMigration)
                         {
-                            var decrypted = SecureStringHelper.Decrypt(settings.OpenAIApiKey);
-                            if (decrypted != null)
+                            System.Diagnostics.Debug.WriteLine("SettingsManager: 检测到明文敏感字段，将自动加密迁移");
+                            _ = Task.Run(() =>
                             {
-                                settings.OpenAIApiKey = decrypted;
-                            }
-                            else
-                            {
-                                // 解密失败 → 旧版明文，保留值并后台重新加密保存
-                                System.Diagnostics.Debug.WriteLine("SettingsManager: API Key 为明文格式，将自动加密迁移");
-                                _ = Task.Run(() =>
-                                {
-                                    try { SaveSettings(settings); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"SettingsManager: 明文迁移加密失败 - {ex.Message}"); }
-                                });
-                            }
+                                try { SaveSettings(settings); } catch (Exception ex) { System.Diagnostics.Debug.WriteLine($"SettingsManager: 明文迁移加密失败 - {ex.Message}"); }
+                            });
                         }
 
                         return settings;
@@ -113,6 +120,25 @@ namespace WinKit.Common
             }
 
             return new AppSettings();
+        }
+
+        /// <summary>
+        /// 尝试把落盘的密文解密为明文，并通过 <paramref name="assign"/> 写回。
+        /// 返回 true 表示该值是旧版明文（解不开），需要调用方重新加密落盘。
+        /// 空值不处理，返回 false。
+        /// </summary>
+        private static bool TryDecryptField(string? storedValue, Action<string> assign)
+        {
+            if (string.IsNullOrEmpty(storedValue)) return false;
+
+            var decrypted = SecureStringHelper.Decrypt(storedValue);
+            if (decrypted != null)
+            {
+                assign(decrypted);
+                return false;
+            }
+
+            return true;   // 解不开 → 旧版明文，保留原值待重加密
         }
 
         public void Dispose()

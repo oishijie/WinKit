@@ -152,6 +152,7 @@ namespace WinKit.Common
                 // ② 待办
                 TodoPinToggle.IsChecked = s.TodoIsPinned;
                 TodoPassthroughToggle.IsChecked = s.TodoIsPassThrough;
+                TodoShowOnStartupToggle.IsChecked = s.TodoShowOnStartup;
                 RecycleDaysBox.Text = Clamp(s.RecycleBinRetentionDays, 1, 365).ToString();
 
                 // ③ 剪贴板
@@ -739,6 +740,14 @@ namespace WinKit.Common
         {
             if (_suspend) return;
             _settingsManager.Settings.TodoIsPassThrough = TodoPassthroughToggle.IsChecked == true;
+            Save();
+        }
+
+        /// <summary>启动时是否自动显示待办窗口（下次启动生效，当前不即时弹出）</summary>
+        private void TodoShowOnStartupToggle_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.TodoShowOnStartup = TodoShowOnStartupToggle.IsChecked == true;
             Save();
         }
 

@@ -97,6 +97,9 @@ namespace WinKit.Common
         public bool TodoIsPinned { get; set; } = false;
         public bool TodoIsPassThrough { get; set; } = false;
 
+        /// <summary>启动时是否自动显示待办窗口（默认关闭，仅驻留托盘）</summary>
+        public bool TodoShowOnStartup { get; set; } = false;
+
         /// <summary>待办回收站保留天数（超期自动清理；默认 60 天）</summary>
         public int RecycleBinRetentionDays { get; set; } = 60;
 

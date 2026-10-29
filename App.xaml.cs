@@ -196,8 +196,14 @@ namespace WinKit
                 });
             }
 
-            // 7. 启动不再自动弹出 TodoList 待办窗口。
-            //    需要时点托盘菜单「显示待办」、双击托盘图标，或按截图/翻译热键即可唤起。
+            // 7. 按「启动时显示待办」设置决定是否在启动后弹出 TodoList 窗口。
+            //    默认不弹，仅驻留托盘；需要时点托盘菜单「显示待办」、双击托盘图标、
+            //    按待办热键，或再运行一次本程序（单实例唤醒）即可唤起。
+            if (_settingsManager.Settings.TodoShowOnStartup && _todoWindow != null)
+            {
+                _todoWindow.Show();
+                _todoWindow.Activate();
+            }
         }
 
         /// <summary>

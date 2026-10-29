@@ -5,6 +5,20 @@
 
 ## [Unreleased]
 
+## [2.3.1] — 2026-10-29
+
+### Added 新增
+- **「启动时显示待办」开关**（设置中心 → 待办 → 窗口行为）：开启后程序启动即把待办面板摆到屏幕右上角；默认关闭，维持「仅驻留托盘」的原有行为。面板与「鼠标穿透」同时开启时可见但不可点击，该组合由用户自行取舍。
+
+### Fixed 修复
+- **剪贴板同步密码以明文落盘**。根因：`SettingsManager` 的 DPAPI 加密硬编码单字段——`SaveSettings` 里写死 `prop.Name == "OpenAIApiKey"`，`LoadSettings` 也只解这一个；同步模块是后加的，`SyncPassword` 没回填白名单，导致 `%APPDATA%\WinKit\settings.json` 中同步密码明文可读。
+  改法：把加密字段收成 `SensitiveFields` 白名单（`OpenAIApiKey` + `SyncPassword`），保存与加载共用同一份清单；单字段解密逻辑抽为 `TryDecryptField`，对两字段各执行一次，任一处判定为旧版明文即触发后台整体重加密。**旧配置无需手动处理**——启动时自动迁移，密码值不变。以后新增敏感配置只需改白名单一处，不会再出现「存时加密、读时漏了」的错位。
+
+### Changed 变更
+- 版本号 2.3.0 → 2.3.1。
+
+## [2.3.0] — 2026-10-29
+
 ### Added 新增（剪贴板同步模块，兼容 SyncClipboard 官方协议）
 - **同步引擎**（`Clipboard/Services/SyncEngine.cs`，约 500 行）：对接 [SyncClipboard](https://github.com/Jeric-X/SyncClipboard) 官方协议（`GET/PUT SyncClipboard.json` + `file/*` 端点 + HTTP Basic Auth），服务器端实测兼容 [SyncClipboardCfServer](https://github.com/Leexunhuan743/SyncClipboardCfServer)（Cloudflare Workers 复刻，D1 + R2 + Durable Objects）。文本 / 图片 / 文件三类推拉：
   - **协议逐字对齐官方源码**（`ProfileDto.cs` + `ImageProfile/FileProfile` + `docs/Hash.md` 三方交叉验证）：文本 hash = `SHA256(UTF8)→大写hex`；**图片/文件的 `hash` 不是内容哈希**，而是 `SHA256("文件名|" + 大写hex(内容SHA256))`，内容哈希单独放 `transferDataHash`；图片远端命名对齐官方 `Image_时间戳.png` 格式——手机端官方客户端可直接混用。

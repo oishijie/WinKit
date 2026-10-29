@@ -623,6 +623,22 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                        <TextBlock Text="启动时显示待办" Style="{StaticResource RowLabel}"/>
+                                        <TextBlock Text="程序启动后直接摆出待办面板；关闭则仅驻留托盘" Style="{StaticResource RowHint}"/>
+                                    </StackPanel>
+                                    <CheckBox x:Name="TodoShowOnStartupToggle" Grid.Column="1"
+                                              Style="{StaticResource ToggleSwitch}"
+                                              Click="TodoShowOnStartupToggle_Click"/>
+                                </Grid>
+                            </Border>
+
+                            <Border Style="{StaticResource Card}">
+                                <Grid Margin="0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                                         <TextBlock Text="鼠标穿透" Style="{StaticResource RowLabel}"/>
                                         <TextBlock Text="开启后待办面板不拦截鼠标点击，便于贴边常驻参考" Style="{StaticResource RowHint}"/>
                                     </StackPanel>
