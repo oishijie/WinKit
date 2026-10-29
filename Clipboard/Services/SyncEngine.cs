@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -50,6 +51,30 @@ namespace WinKit.Clipboard.Services
 
         private CancellationTokenSource? _cts;
 
+        // ── 同步状态可视化（设置页「同步」分区展示）─────────────────
+        /// <summary>上次一轮推拉全部正常的时间</summary>
+        public DateTime? LastSuccessAt { get; private set; }
+
+        /// <summary>最近一次失败的摘要（null = 当前无错误）</summary>
+        public string? LastError { get; private set; }
+
+        /// <summary>连续失败轮数（成功即清零；≥3 触发退避）</summary>
+        public int ConsecutiveFailures { get; private set; }
+
+        /// <summary>当前实际轮询间隔（退避后可能大于配置值，供设置页展示）</summary>
+        public int EffectiveIntervalMs => Math.Min(
+            (int)(Math.Max(1000, _settingsManager.Settings.SyncIntervalMs) * BackoffMultiplier),
+            60_000);
+
+        /// <summary>退避倍率：0 失败 = 1x；连续失败 ≥3 次翻倍，封顶 60s（防止服务器异常时空转打请求）</summary>
+        private double BackoffMultiplier => ConsecutiveFailures switch
+        {
+            0 => 1.0,
+            1 => 1.0,
+            2 => 2.0,
+            _ => Math.Min(Math.Pow(2, ConsecutiveFailures - 1), 12.0) // 4x, 8x, 12x 封顶
+        };
+
         /// <summary>Nudge 唤醒源：右键推送等显式动作后立即触发一轮循环，不等轮询间隔</summary>
         private TaskCompletionSource<bool>? _nudgeTcs;
 
@@ -81,16 +106,22 @@ namespace WinKit.Clipboard.Services
                 _nudgeTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
                 var nudge = _nudgeTcs.Task;
 
-                // 每轮读取间隔，设置页改完即时生效
-                int interval = Math.Max(1000, _settingsManager.Settings.SyncIntervalMs);
+                // 每轮读取间隔，设置页改完即时生效；连续失败后指数退避（封顶 60s）
+                int interval = (int)(Math.Max(1000, _settingsManager.Settings.SyncIntervalMs) * BackoffMultiplier);
+                interval = Math.Min(interval, 60_000);
                 try
                 {
                     await PullAsync(ct).ConfigureAwait(false);
                     await PushAsync(ct).ConfigureAwait(false);
+                    ConsecutiveFailures = 0;
+                    LastError = null;
+                    LastSuccessAt = DateTime.Now;
                 }
-                catch
+                catch (Exception ex)
                 {
-                    // 网络 / 服务器异常静默，下一轮重试
+                    // 网络 / 服务器异常：记账 + 退避，下一轮重试（不弹窗）
+                    ConsecutiveFailures++;
+                    LastError = ex.Message;
                 }
 
                 try
@@ -141,9 +172,8 @@ namespace WinKit.Clipboard.Services
                     break;
 
                 case "Group":
-                    // 官方多文件组（zip 打包），一期不做
-                    SyncSkipped?.Invoke("远端为多文件组，暂不支持拉取");
-                    _lastRemoteHash = profile.Hash;
+                    if (!s.SyncFile) { _lastRemoteHash = profile.Hash; return; }
+                    await PullGroupAsync(profile, ct).ConfigureAwait(false);
                     break;
 
                 default:
@@ -218,6 +248,7 @@ namespace WinKit.Clipboard.Services
             }
 
             int w = 0, h = 0;
+            var ext = Path.GetExtension(dataName);
             await _dispatcher.InvokeAsync(() =>
             {
                 try
@@ -228,8 +259,24 @@ namespace WinKit.Clipboard.Services
                         System.Windows.Media.Imaging.BitmapCacheOption.OnLoad);
                     w = frame.PixelWidth;
                     h = frame.PixelHeight;
-                    System.Windows.Clipboard.SetImage(frame);
-                    _clipboardManager.AddImageItem(frame);
+
+                    // 原始字节入库（保留 jpg/png 原格式，避免 BitmapSource→PNG 二次编码损失）
+                    _clipboardManager.AddImageItem(bytes, ext);
+
+                    // 剪贴板双格式：位图（即时粘贴显示）+ 原始文件（可粘贴出原文件）
+                    var imagePath = _clipboardManager.Items.Count > 0 ? _clipboardManager.Items[0].ImagePath : null;
+                    if (imagePath != null && File.Exists(imagePath))
+                    {
+                        var data = new System.Windows.DataObject();
+                        data.SetImage(frame);
+                        data.SetFileDropList(new StringCollection { imagePath });
+                        System.Windows.Clipboard.SetDataObject(data);
+                    }
+                    else
+                    {
+                        System.Windows.Clipboard.SetImage(frame);
+                    }
+
                     if (_clipboardManager.Items.Count > 0)
                         _lastPulledItemId = _clipboardManager.Items[0].Id;
                 }
@@ -521,6 +568,266 @@ namespace WinKit.Clipboard.Services
                 if (s.SyncNotifyPush)
                     SyncSucceeded?.Invoke($"已推送文件：{name} ({FormatSize(length)})");
             }
+        }
+
+        // ══════════════════════════════════════════════════
+        //  Group 多文件组（官方 zip 打包语义，协议逐字对齐 GroupProfile.cs）
+        //  hash = 条目清单增量 SHA256：条目按 entryName 的 UTF-8 字节升序排序，
+        //  文件行 "F|{entry}|{length}|{大写hex(内容SHA256)}\0"、目录行 "D|{entry}\0" 逐条 AppendData。
+        //  transferDataHash = zip 文件内容的 SHA256（大写 hex）；dataName = File_{时间戳}.zip。
+        // ══════════════════════════════════════════════════
+
+        /// <summary>
+        /// 显式推送多文件（右键多选入口）：打包 zip 为官方 Group 类型。
+        /// 显式意图优先，仅总大小上限拦截；单文件自动降级为 File 类型。
+        /// </summary>
+        public void PushGroupNow(IReadOnlyList<string> files)
+        {
+            var valid = files.Where(File.Exists).ToList();
+            if (valid.Count == 0) return;
+            if (valid.Count == 1) { PushFileNow(valid[0]); return; }
+
+            _dispatcher.InvokeAsync(() =>
+            {
+                try
+                {
+                    var list = new StringCollection();
+                    foreach (var f in valid) list.Add(f);
+                    System.Windows.Clipboard.SetFileDropList(list);
+                }
+                catch { /* 剪贴板被占用时忽略 */ }
+                foreach (var f in valid) _clipboardManager.AddFileItem(f);
+            });
+
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await PushGroupAsync(valid, CancellationToken.None).ConfigureAwait(false);
+                    Nudge();
+                }
+                catch { /* 静默 */ }
+            });
+        }
+
+        private async Task PushGroupAsync(List<string> files, CancellationToken ct)
+        {
+            long total = 0;
+            foreach (var f in files)
+            {
+                try { total += new FileInfo(f).Length; }
+                catch { return; }
+            }
+            var maxBytes = _settingsManager.Settings.SyncFileMaxMB * 1024L * 1024L;
+            if (total > maxBytes)
+            {
+                SyncSkipped?.Invoke($"多文件组（{FormatSize(total)}）超出推送上限，已跳过");
+                return;
+            }
+
+            var dataName = $"File_{DateTime.Now:yyyyMMddHHmmssfff}.zip";
+            var zipPath = Path.Combine(Path.GetTempPath(), dataName);
+            string groupHash, transferHash;
+            try
+            {
+                (groupHash, transferHash) = await BuildGroupZipAsync(files, zipPath, ct).ConfigureAwait(false);
+            }
+            catch { return; }
+
+            try
+            {
+                await using var fs = File.OpenRead(zipPath);
+                using var content = new StreamContent(fs);
+                using var resp = await _http.PutAsync(
+                    BuildUrl($"file/{Uri.EscapeDataString(dataName)}"), content, ct).ConfigureAwait(false);
+                if (!resp.IsSuccessStatusCode) return;
+            }
+            catch { return; }
+            finally
+            {
+                try { File.Delete(zipPath); } catch { }
+            }
+
+            var profile = new SyncClipboardProfile
+            {
+                Type = "Group",
+                Text = string.Join("\r\n", files.Select(Path.GetFileName)),
+                HasData = true,
+                DataName = dataName,
+                TransferDataHash = transferHash,
+                Hash = groupHash,
+                Size = total
+            };
+            if (await PutProfileAsync(profile, ct).ConfigureAwait(false))
+            {
+                _lastPushedHash = groupHash;
+                _lastPushedContentHash = transferHash;
+                if (_settingsManager.Settings.SyncNotifyPush)
+                    SyncSucceeded?.Invoke($"已推送文件组（{files.Count} 项，{FormatSize(total)}）");
+            }
+        }
+
+        private sealed record GroupEntryItem(string EntryName, bool IsDir, long Length, string ContentHash);
+
+        /// <summary>打包 zip（官方结构：文件条目名 = 文件名，目录条目名 = dirName/ 前缀）并算清单 hash</summary>
+        private async Task<(string GroupHash, string TransferHash)> BuildGroupZipAsync(
+            List<string> files, string zipPath, CancellationToken ct)
+        {
+            var entries = new List<GroupEntryItem>();
+            await using (var fs = new FileStream(zipPath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, true))
+            using (var zip = new ZipArchive(fs, ZipArchiveMode.Create, leaveOpen: false, Encoding.UTF8))
+            {
+                foreach (var path in files)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    if (Directory.Exists(path))
+                    {
+                        var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
+                        zip.CreateEntry(dirName + "/", CompressionLevel.Optimal);
+                        entries.Add(new GroupEntryItem(dirName + "/", true, 0, ""));
+                        foreach (var sub in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
+                        {
+                            var entryName = dirName + "/" + Path.GetRelativePath(path, sub).Replace('\\', '/');
+                            zip.CreateEntryFromFile(sub, entryName, CompressionLevel.Optimal);
+                            entries.Add(new GroupEntryItem(entryName, false, new FileInfo(sub).Length,
+                                Convert.ToHexString(await SHA256.HashDataAsync(File.OpenRead(sub), ct).ConfigureAwait(false))));
+                        }
+                    }
+                    else
+                    {
+                        var entryName = Path.GetFileName(path);
+                        zip.CreateEntryFromFile(path, entryName, CompressionLevel.Optimal);
+                        entries.Add(new GroupEntryItem(entryName, false, new FileInfo(path).Length,
+                            await ComputeContentHashFromFileAsync(path, ct).ConfigureAwait(false)));
+                    }
+                }
+            }
+
+            var transferHash = await ComputeContentHashFromFileAsync(zipPath, ct).ConfigureAwait(false);
+            return (ComputeGroupHash(entries), transferHash);
+        }
+
+        /// <summary>条目清单 hash（对齐官方 CalculateEntriesHashAsync：UTF-8 字节序排序 + 逐条 AppendData）</summary>
+        private static string ComputeGroupHash(List<GroupEntryItem> entries)
+        {
+            var ordered = entries
+                .Select(e => (Item: e, Key: Encoding.UTF8.GetBytes(e.EntryName)))
+                .OrderBy(k => k.Key, ByteArrayComparer.Instance)
+                .ToList();
+
+            using var incremental = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+            foreach (var (item, _) in ordered)
+            {
+                var line = item.IsDir
+                    ? $"D|{item.EntryName}\0"
+                    : $"F|{item.EntryName}|{item.Length}|{item.ContentHash.ToUpperInvariant()}\0";
+                incremental.AppendData(Encoding.UTF8.GetBytes(line));
+            }
+            return Convert.ToHexString(incremental.GetHashAndReset());
+        }
+
+        /// <summary>字节数组逐位比较（对齐官方 ByteArrayComparer，用于条目名排序）</summary>
+        private sealed class ByteArrayComparer : IComparer<byte[]>
+        {
+            public static readonly ByteArrayComparer Instance = new();
+            public int Compare(byte[]? x, byte[]? y)
+            {
+                if (x == null || y == null) return (x?.Length ?? 0).CompareTo(y?.Length ?? 0);
+                int len = Math.Min(x.Length, y.Length);
+                for (int i = 0; i < len; i++)
+                    if (x[i] != y[i]) return x[i].CompareTo(y[i]);
+                return x.Length.CompareTo(y.Length);
+            }
+        }
+
+        /// <summary>拉取远端多文件组：下载 zip → 校验 → 解包 → FileDropList 写回剪贴板 + 逐文件入历史</summary>
+        private async Task PullGroupAsync(SyncClipboardProfile profile, CancellationToken ct)
+        {
+            var dataName = profile.DataName;
+            if (string.IsNullOrEmpty(dataName)) { _lastRemoteHash = profile.Hash; return; }
+
+            var s = _settingsManager.Settings;
+            if (profile.Size > s.SyncFileMaxMB * 1024L * 1024L)
+            {
+                SyncSkipped?.Invoke($"远端文件组（{FormatSize(profile.Size ?? 0)}）超出本地上限，跳过拉取");
+                _lastRemoteHash = profile.Hash;
+                return;
+            }
+
+            byte[] bytes;
+            try
+            {
+                bytes = await _http.GetByteArrayAsync(BuildUrl($"file/{Uri.EscapeDataString(dataName)}"), ct)
+                    .ConfigureAwait(false);
+            }
+            catch { return; } // 下轮重试
+
+            if (!string.IsNullOrEmpty(profile.TransferDataHash) &&
+                !profile.TransferDataHash.Equals(ComputeContentHash(bytes), StringComparison.OrdinalIgnoreCase))
+            {
+                _lastRemoteHash = profile.Hash;
+                return;
+            }
+
+            var extractDir = Path.Combine(AppPaths.SyncDir,
+                $"Group_{DateTime.Now:yyyyMMddHHmmssfff}");
+            try
+            {
+                using var ms = new MemoryStream(bytes);
+                using var zip = new ZipArchive(ms, ZipArchiveMode.Read, leaveOpen: false, Encoding.UTF8);
+                Directory.CreateDirectory(extractDir);
+                zip.ExtractToDirectory(extractDir, overwriteFiles: true);
+            }
+            catch
+            {
+                return; // 解包失败下轮重试
+            }
+
+            // 顶层条目写回 FileDropList；其中文件逐个入历史（目录仅进剪贴板）
+            List<string> topEntries;
+            List<string> fileEntries;
+            try
+            {
+                topEntries = zipTopEntries(bytes);
+                fileEntries = topEntries.Where(File.Exists).ToList();
+            }
+            catch { topEntries = fileEntries = new List<string>(); }
+
+            static List<string> zipTopEntries(byte[] raw)
+            {
+                using var ms = new MemoryStream(raw);
+                using var zip = new ZipArchive(ms, ZipArchiveMode.Read, leaveOpen: false, Encoding.UTF8);
+                return zip.Entries
+                    .Select(e => e.FullName.Replace('\\', '/').Split('/')[0])
+                    .Where(x => x.Length > 0)
+                    .Distinct()
+                    .ToList();
+            }
+
+            await _dispatcher.InvokeAsync(() =>
+            {
+                try
+                {
+                    var list = new StringCollection();
+                    foreach (var name in topEntries)
+                        list.Add(Path.Combine(extractDir, name));
+                    if (list.Count > 0)
+                        System.Windows.Clipboard.SetFileDropList(list);
+                    foreach (var f in fileEntries)
+                        _clipboardManager.AddFileItem(f);
+                    if (_clipboardManager.Items.Count > 0)
+                        _lastPulledItemId = _clipboardManager.Items[0].Id;
+                }
+                catch { /* 剪贴板被占用时忽略 */ }
+            }).Task.ConfigureAwait(false);
+
+            _lastPulledHash = profile.Hash;
+            _lastPushedHash = profile.Hash;
+            _lastPushedContentHash = ComputeContentHash(bytes);
+            _lastRemoteHash = profile.Hash;
+
+            if (s.SyncNotifyPull)
+                SyncSucceeded?.Invoke($"收到远端文件组（{topEntries.Count} 项，{FormatSize(bytes.Length)}）");
         }
 
         // ══════════════════════════════════════════════════

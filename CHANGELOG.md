@@ -29,6 +29,18 @@
 - WPF + WinForms 混合下 `Application`/`Clipboard` 命名空间歧义（CS0104），且项目自身命名空间 `WinKit.Clipboard` 会**遮蔽** `System.Windows.Clipboard`（CS0234）——同步引擎内一律用完全限定名。
 - 构建报 MSB3027 文件锁（WinKit 正在运行）→ 结束进程重建，数据全落盘无损失。
 
+### Added 新增（同步二期 + ROADMAP 清尾，2026-10-29）
+- **Group 多文件同步**（对齐官方 `GroupProfile.cs` 逐字节实现）：右键多选文件自动打包 `File_时间戳.zip` 推送（条目清单 hash = UTF-8 字节序排序后 `D|名` / `F|名|长度|内容hash\0` 逐条 SHA256，对齐官方 `CalculateEntriesHashAsync`）；远端 Group 拉取自动解包、逐条校验 hash 后写回剪贴板 `FileDropList`，文件落 `sync/<hash>/` 目录。
+- **拉取图片质量优化**：新增 `ClipboardManager.AddImageItem(byte[], ext)` 原始字节入库（保留 jpg/png 原格式，消除 BitmapSource→PNG 二次编码损失与字节漂移）；拉取图片写回剪贴板改为**双格式**（位图 + FileDropList 原文件，可粘贴出原始文件）。
+- **同步状态可视化**：设置页「同步」页顶部状态行（运行中/已停用/连续失败 N 次），含上次成功时间与最近错误；`SyncEngine` 暴露 `LastSuccessAt`/`LastError`/`ConsecutiveFailures`。
+- **失败退避重试**：连续失败按 2^N 拉长轮询间隔（上限 8 倍基础间隔），成功后立即回落；`Nudge()` 不受退避影响。
+- **软件自动更新**（`Common/UpdateService.cs`）：三源（Gitee API / GitHub releases 302 解析 / CNB `latest.json` 清单）并发探测（1.5s 超时），**取版本最高的成功源**而非最快源；「自动检查更新」（默认开，每日一次）与「自动下载更新包」（默认关）双开关分离；下载完成后气泡提供「打开」跳转资源管理器定位安装包。设置页「通用」分区新增「软件更新」卡片（当前版本 / 上次检查时间 / 立即检查）。
+- **回收站收尾**：设置「待办」分区暴露「回收站保留天数」（1-365）；回收站窗口支持 Ctrl/Shift 多选批量还原 / 删除（按钮带选中计数）。
+- **图片缓存可视化**：设置「剪贴板」分区新增「图片缓存」卡片——保留天数 / 容量上限（10-1024 MB）可配，当前占用实时统计 + 「打开文件夹」入口。
+- README 新增「剪贴板同步」章节并关联 [SyncClipboardCfServer](https://github.com/oishijie/SyncClipboardCfServer) 服务器仓库。
+- 仓库根新增 `latest.json`（CNB 更新清单，发版时随版本更新）。
+- 版本号 2.2.0 → 2.3.0。
+
 ## [2.2.0] — 2026-10-27
 
 ### Added 新增（自上游 li5bo5/WinKit v2.11 移植）

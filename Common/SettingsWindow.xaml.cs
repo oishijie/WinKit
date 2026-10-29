@@ -144,9 +144,15 @@ namespace WinKit.Common
                 AutoStartToggle.IsChecked = AutoStartHelper.IsAutoStartEnabled();
                 DataDirText.Text = AppPaths.AppData;
 
+                // ①.5 软件更新
+                UpdateAutoCheckToggle.IsChecked = s.UpdateAutoCheck;
+                UpdateAutoDownloadToggle.IsChecked = s.UpdateAutoDownload;
+                UpdateVersionText.Text = $"v{UpdateService.CurrentVersion} · 上次检查：{(s.LastUpdateCheckAt.HasValue ? s.LastUpdateCheckAt.Value.ToString("MM-dd HH:mm") : "从未")}";
+
                 // ② 待办
                 TodoPinToggle.IsChecked = s.TodoIsPinned;
                 TodoPassthroughToggle.IsChecked = s.TodoIsPassThrough;
+                RecycleDaysBox.Text = Clamp(s.RecycleBinRetentionDays, 1, 365).ToString();
 
                 // ③ 剪贴板
                 ClipMonitorToggle.IsChecked = s.PasteEnableMonitoring;
@@ -155,6 +161,9 @@ namespace WinKit.Common
                 UpdateClipCount();
                 ClipDetailCard.IsEnabled = s.PasteEnableMonitoring;
                 ClipHotkeyCard.IsEnabled = s.PasteEnableMonitoring;
+                ImageDaysBox.Text = Clamp(s.ClipboardImageRetentionDays, 1, 365).ToString();
+                ImageMaxMbBox.Text = Clamp(s.ClipboardImageMaxStorageMB, 10, 1024).ToString();
+                UpdateImageUsage();
 
                 // ④ 同步
                 SyncUrlBox.Text = s.SyncUrl ?? "";
@@ -604,7 +613,8 @@ namespace WinKit.Common
             PageTranslate.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
             PageAbout.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
 
-            if (index == 2) UpdateClipCount();
+            if (index == 2) { UpdateClipCount(); UpdateImageUsage(); }
+            if (index == 3) SyncStatusText.Text = CurrentApp?.GetSyncStatusText() ?? "未知";
             if (index == 5) RefreshOcrHistory();   // 识别历史按需重建，避免每次改设置都全量查询
             if (index == 6) RefreshOcrStatus();
         }
@@ -664,6 +674,52 @@ namespace WinKit.Common
                 System.Windows.MessageBox.Show($"无法打开目录: {ex.Message}", "WinKit",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
             }
+        }
+
+        // ══════════════════════════════════════════════
+        //  ①.5 软件更新
+        // ══════════════════════════════════════════════
+
+        private void UpdateAutoCheck_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.UpdateAutoCheck = UpdateAutoCheckToggle.IsChecked == true;
+            Save();
+            CurrentApp?.ToggleUpdateLoop(UpdateAutoCheckToggle.IsChecked == true);
+        }
+
+        private void UpdateAutoDownload_Click(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            _settingsManager.Settings.UpdateAutoDownload = UpdateAutoDownloadToggle.IsChecked == true;
+            Save();
+        }
+
+        private async void CheckUpdate_Click(object sender, RoutedEventArgs e)
+        {
+            CheckUpdateBtn.IsEnabled = false;
+            CheckUpdateBtn.Content = "检查中…";
+            try
+            {
+                await CurrentApp?.RunUpdateFlowAsync(manual: true)!;
+            }
+            finally
+            {
+                CheckUpdateBtn.IsEnabled = true;
+                CheckUpdateBtn.Content = "检查更新";
+                var s = _settingsManager.Settings;
+                UpdateVersionText.Text = $"v{UpdateService.CurrentVersion} · 上次检查：{(s.LastUpdateCheckAt.HasValue ? s.LastUpdateCheckAt.Value.ToString("MM-dd HH:mm") : "从未")}";
+            }
+        }
+
+        // ══════════════════════════════════════════════
+        //  ③.5 同步状态
+        // ══════════════════════════════════════════════
+
+        private void SyncCheckNow_Click(object sender, RoutedEventArgs e)
+        {
+            CurrentApp?.SyncCheckNow();
+            SyncStatusText.Text = CurrentApp?.GetSyncStatusText() ?? "未知";
         }
 
         // ══════════════════════════════════════════════
@@ -871,6 +927,76 @@ namespace WinKit.Common
         {
             int count = CurrentApp?.ClipboardManager?.Items.Count ?? 0;
             ClipCountText.Text = $"当前已保存 {count} 条记录";
+        }
+
+        private void UpdateImageUsage()
+        {
+            try
+            {
+                var dir = new System.IO.DirectoryInfo(AppPaths.Images);
+                long bytes = 0; int files = 0;
+                if (dir.Exists)
+                {
+                    foreach (var f in dir.EnumerateFiles())
+                    {
+                        bytes += f.Length; files++;
+                    }
+                }
+                ImageUsageText.Text = files == 0
+                    ? "images 目录暂无缓存图片"
+                    : $"{files} 张图片，共 {bytes / 1024.0 / 1024.0:F1} MB（{AppPaths.Images}）";
+            }
+            catch
+            {
+                ImageUsageText.Text = "占用统计失败";
+            }
+        }
+
+        private void RecycleDaysBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            if (!int.TryParse(RecycleDaysBox.Text.Trim(), out int v)) { RecycleDaysBox.Text = _settingsManager.Settings.RecycleBinRetentionDays.ToString(); return; }
+            v = Clamp(v, 1, 365);
+            RecycleDaysBox.Text = v.ToString();
+            if (_settingsManager.Settings.RecycleBinRetentionDays == v) return;
+            _settingsManager.Settings.RecycleBinRetentionDays = v;
+            Save();
+        }
+
+        private void ImageDaysBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            if (!int.TryParse(ImageDaysBox.Text.Trim(), out int v)) { ImageDaysBox.Text = _settingsManager.Settings.ClipboardImageRetentionDays.ToString(); return; }
+            v = Clamp(v, 1, 365);
+            ImageDaysBox.Text = v.ToString();
+            if (_settingsManager.Settings.ClipboardImageRetentionDays == v) return;
+            _settingsManager.Settings.ClipboardImageRetentionDays = v;
+            Save();
+        }
+
+        private void ImageMaxMbBox_Commit(object sender, RoutedEventArgs e)
+        {
+            if (_suspend) return;
+            if (!int.TryParse(ImageMaxMbBox.Text.Trim(), out int v)) { ImageMaxMbBox.Text = _settingsManager.Settings.ClipboardImageMaxStorageMB.ToString(); return; }
+            v = Clamp(v, 10, 1024);
+            ImageMaxMbBox.Text = v.ToString();
+            if (_settingsManager.Settings.ClipboardImageMaxStorageMB == v) return;
+            _settingsManager.Settings.ClipboardImageMaxStorageMB = v;
+            Save();
+        }
+
+        private void OpenImagesDir_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                AppPaths.EnsureDirectories();
+                System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(AppPaths.Images) { UseShellExecute = true });
+            }
+            catch (Exception ex)
+            {
+                System.Windows.MessageBox.Show($"无法打开目录: {ex.Message}", "WinKit",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
         }
 
         // ══════════════════════════════════════════════

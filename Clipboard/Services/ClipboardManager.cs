@@ -168,6 +168,53 @@ namespace WinKit.Clipboard.Services
             }
         }
 
+        /// <summary>
+        /// 添加图片项（原始字节版）：远端同步来的图片直接保存原始字节（保留 jpg/png/webp 原格式），
+        /// 避免 BitmapSource → PNG 的二次编码造成质量损失与体积膨胀。剪贴板显示仍走 BitmapFrame 解码。
+        /// </summary>
+        public void AddImageItem(byte[] rawBytes, string ext)
+        {
+            if (rawBytes == null || rawBytes.Length == 0) return;
+            ext = string.IsNullOrWhiteSpace(ext) ? ".png" : (ext.StartsWith('.') ? ext : "." + ext);
+
+            var hash = ComputeDataHash(rawBytes);
+            // 与最新图片项内容级去重
+            if (_items.Count > 0 && _items[0].Type == ClipboardItemType.Image && _items[0].ContentHash == hash)
+                return;
+
+            var fileName = $"{Guid.NewGuid()}{ext.ToLowerInvariant()}";
+            var filePath = System.IO.Path.Combine(AppPaths.Images, fileName);
+
+            try
+            {
+                File.WriteAllBytes(filePath, rawBytes);
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"ClipboardManager: 图片保存失败 - {ex.Message}");
+                return;
+            }
+
+            var item = new ClipboardItem
+            {
+                Type = ClipboardItemType.Image,
+                Content = fileName, // 相对路径（ImagePath 自动拼接）
+                ContentHash = hash,
+                Timestamp = DateTime.Now
+            };
+
+            InsertItemToDb(item);
+            _items.Insert(0, item);
+
+            _imageCleanup?.TriggerCleanup();
+
+            if (++_insertsSinceCleanup >= CleanupThrottle)
+            {
+                CleanupOldData();
+                _insertsSinceCleanup = 0;
+            }
+        }
+
         public void AddTextItem(string text)
         {
             if (string.IsNullOrWhiteSpace(text)) return;

@@ -1,4 +1,5 @@
 using System;
+using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading;
@@ -19,6 +20,8 @@ namespace WinKit
         private SyncEngine? _syncEngine;
         /// <summary>同步总开关关闭时的显式推送专用引擎（不跑轮询循环，仅右键「同步到手机」用）</summary>
         private SyncEngine? _pushOnlyEngine;
+        private UpdateService? _updateService;
+        private CancellationTokenSource? _updateCts;
         /// <summary>已装配到钩子上的唤出键快照，用于判断设置变更后是否真需要重装</summary>
         private HotkeyConfig? _appliedClipboardHotkey;
         /// <summary>上面那份快照对应的「剪贴板监控」开关状态</summary>
@@ -138,6 +141,13 @@ namespace WinKit
             if (selfClipFiles.Length > 0)
             {
                 ProcessClipSendFiles(selfClipFiles);
+            }
+
+            // 4.7 自动更新：启动后台每日静默检查（手动检查走设置页按钮，共用 RunUpdateFlowAsync）。
+            //     放在托盘之后：气泡提示需要托盘图标。
+            if (_settingsManager.Settings.UpdateAutoCheck)
+            {
+                StartUpdateLoop();
             }
 
             // 5. 装配低级键盘钩子，接管剪贴板唤出键（默认 Win+V）。
@@ -308,13 +318,16 @@ namespace WinKit
 
             try
             {
-                ObtainPushEngine().PushFileNow(files[0]);
-
-                for (int i = 1; i < files.Length; i++)
-                    _clipboardManager.AddFileItem(files[i]);
-
-                if (files.Length > 1)
-                    _trayHelper?.ShowSyncTip($"已推送：{Path.GetFileName(files[0])}（多选仅同步第一个）");
+                if (files.Length == 1)
+                {
+                    ObtainPushEngine().PushFileNow(files[0]);
+                }
+                else
+                {
+                    // 多选打包为官方 Group 类型（zip），多文件一步到位
+                    ObtainPushEngine().PushGroupNow(files);
+                    _trayHelper?.ShowSyncTip($"已推送文件组：{files.Length} 项");
+                }
             }
             catch (Exception ex)
             {
@@ -550,6 +563,111 @@ namespace WinKit
         }
 
         /// <summary>
+        /// 启动自动更新的后台循环：每小时醒来，距上次检查超过 24 小时才真正探测。
+        /// 手动检查（设置页按钮）走 CheckForUpdateNow，不受此循环影响。
+        /// </summary>
+        public void StartUpdateLoop()
+        {
+            if (_updateCts != null) return; // 已在跑
+            _updateCts = new CancellationTokenSource();
+            var ct = _updateCts.Token;
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(30), ct); // 避开启动高峰
+                    while (!ct.IsCancellationRequested)
+                    {
+                        var last = _settingsManager!.Settings.LastUpdateCheckAt;
+                        if (!last.HasValue || DateTime.Now - last.Value > TimeSpan.FromHours(24))
+                        {
+                            await RunUpdateFlowAsync(manual: false);
+                        }
+                        await Task.Delay(TimeSpan.FromHours(1), ct);
+                    }
+                }
+                catch (OperationCanceledException) { }
+                catch { /* 循环异常静默，下轮重试 */ }
+            }, ct);
+        }
+
+        /// <summary>关闭/开启自动检查开关时调用（设置页）</summary>
+        public void ToggleUpdateLoop(bool enable)
+        {
+            if (enable) StartUpdateLoop();
+            else { _updateCts?.Cancel(); _updateCts = null; }
+        }
+
+        /// <summary>
+        /// 完整更新流程：三源探测 → 版本判断 →（按开关）后台下载 → 气泡反馈。
+        /// manual=true 时结果无论有无更新都气泡告知；静默模式只在有更新或下载完成时提示。
+        /// </summary>
+        public async Task RunUpdateFlowAsync(bool manual)
+        {
+            _updateService ??= new UpdateService();
+            var r = await _updateService.CheckAsync();
+
+            _settingsManager!.Settings.LastUpdateCheckAt = DateTime.Now;
+            _settingsManager.SaveSettings(_settingsManager.Settings);
+
+            if (!r.Probed)
+            {
+                if (manual) _trayHelper?.ShowTip("WinKit 更新", "检查失败：三个源均不可达");
+                return;
+            }
+
+            if (!r.HasUpdate)
+            {
+                if (manual) _trayHelper?.ShowTip("WinKit 更新", $"已是最新版本 v{UpdateService.CurrentVersion}");
+                return;
+            }
+
+            if (!_settingsManager.Settings.UpdateAutoDownload)
+            {
+                _trayHelper?.ShowTip("WinKit 更新",
+                    $"发现新版本 {r.LatestVersion}（{r.SourceName} 源）\n请到 设置 → 通用 → 软件更新 下载");
+                return;
+            }
+
+            _trayHelper?.ShowTip("WinKit 更新", $"发现新版本 {r.LatestVersion}（{r.SourceName} 源），后台下载中…");
+            var file = await _updateService.DownloadAsync(r.LatestVersion!, r.DownloadUrl!);
+            if (file != null)
+            {
+                _trayHelper?.ShowTip("WinKit 更新", $"新版本已下载完成\n{file}\n关闭 WinKit 后解压覆盖即可升级");
+                try { Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{file}\"")); }
+                catch { }
+            }
+            else
+            {
+                _trayHelper?.ShowTip("WinKit 更新", $"新版本 {r.LatestVersion} 下载失败，可稍后在设置里重试");
+            }
+        }
+
+        /// <summary>同步引擎状态文本（设置页「同步」分区展示）</summary>
+        public string GetSyncStatusText()
+        {
+            var e = _syncEngine;
+            if (e == null) return "未运行（托盘「剪贴板同步」总开关未开启）";
+            if (e.LastError != null)
+                return $"异常（连续 {e.ConsecutiveFailures} 轮）：{e.LastError} · 退避轮询 {e.EffectiveIntervalMs / 1000.0:F0}s";
+            return e.LastSuccessAt.HasValue
+                ? $"正常 · 上次成功 {e.LastSuccessAt.Value:HH:mm:ss} · 轮询 {e.EffectiveIntervalMs / 1000}s"
+                : "运行中 · 等待首轮完成";
+        }
+
+        /// <summary>设置页「立即检查」：唤醒一轮推拉（Nudge），结果反映在状态行与气泡</summary>
+        public void SyncCheckNow()
+        {
+            if (_syncEngine == null)
+            {
+                _trayHelper?.ShowTip("WinKit 同步", "同步总开关未开启（托盘右键「剪贴板同步」）");
+                return;
+            }
+            _syncEngine.Nudge();
+            _trayHelper?.ShowTip("WinKit 同步", "已触发一轮同步，几秒后状态行刷新");
+        }
+
+        /// <summary>
         /// 启动剪贴板同步引擎（已启动则忽略），并把同步成功事件接到托盘气泡。
         /// </summary>
         public void StartSyncEngine()
@@ -674,6 +792,8 @@ namespace WinKit
             // 优雅释放所有非托管钩子和资源
             _singleInstanceMutex?.Dispose();
             _showExistingEvent?.Dispose();
+            _updateCts?.Cancel();
+            _updateCts?.Dispose();
             _syncEngine?.Dispose();
             _pushOnlyEngine?.Dispose();
             _translateModule?.Dispose();

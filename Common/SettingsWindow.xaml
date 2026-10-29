@@ -537,6 +537,57 @@
                                     </Grid>
                                 </StackPanel>
                             </Border>
+
+                            <TextBlock Text="软件更新" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="自动检查更新" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="启动后每日静默检查一次，Gitee / GitHub / CNB 三源择优" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="UpdateAutoCheckToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="UpdateAutoCheck_Click"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="自动下载更新包" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="发现新版本即后台下载，完成后气泡提示；关 = 仅提示不下载" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <CheckBox x:Name="UpdateAutoDownloadToggle" Grid.Column="1"
+                                                  Style="{StaticResource ToggleSwitch}"
+                                                  Click="UpdateAutoDownload_Click"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="当前版本" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock x:Name="UpdateVersionText" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <Button x:Name="CheckUpdateBtn" Grid.Column="1" Content="检查更新"
+                                                Style="{StaticResource MinorBtn}"
+                                                Click="CheckUpdate_Click"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
 
@@ -578,6 +629,25 @@
                                     <CheckBox x:Name="TodoPassthroughToggle" Grid.Column="1"
                                               Style="{StaticResource ToggleSwitch}"
                                               Click="TodoPassthroughToggle_Click"/>
+                                </Grid>
+                            </Border>
+
+                            <TextBlock Text="回收站" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <Grid Margin="0,10">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                        <TextBlock Text="回收站保留天数" Style="{StaticResource RowLabel}"/>
+                                        <TextBlock Text="已删除待办超过该天数后自动彻底清除（1-365）" Style="{StaticResource RowHint}"/>
+                                    </StackPanel>
+                                    <TextBox x:Name="RecycleDaysBox" Grid.Column="1"
+                                             Style="{StaticResource NumBox}"
+                                             PreviewTextInput="NumberOnly_PreviewTextInput"
+                                             LostFocus="RecycleDaysBox_Commit"
+                                             KeyDown="NumBox_KeyDown"/>
                                 </Grid>
                             </Border>
 
@@ -674,6 +744,61 @@
                                     </Grid>
                                 </StackPanel>
                             </Border>
+
+                            <TextBlock Text="图片缓存" Style="{StaticResource GroupTitle}"/>
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="保留天数" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="历史图片超过该天数后自动清理（1-365）" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="ImageDaysBox" Grid.Column="1"
+                                                 Style="{StaticResource NumBox}"
+                                                 PreviewTextInput="NumberOnly_PreviewTextInput"
+                                                 LostFocus="ImageDaysBox_Commit"
+                                                 KeyDown="NumBox_KeyDown"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="容量上限" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="超出后折半淘汰最旧的一半（10-1024 MB）" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <TextBox x:Name="ImageMaxMbBox" Grid.Column="1"
+                                                 Style="{StaticResource NumBox}"
+                                                 PreviewTextInput="NumberOnly_PreviewTextInput"
+                                                 LostFocus="ImageMaxMbBox_Commit"
+                                                 KeyDown="NumBox_KeyDown"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="当前占用" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock x:Name="ImageUsageText" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Content="打开文件夹"
+                                                Style="{StaticResource MinorBtn}"
+                                                Click="OpenImagesDir_Click"/>
+                                    </Grid>
+                                </StackPanel>
+                            </Border>
                         </StackPanel>
                     </ScrollViewer>
 
@@ -688,6 +813,22 @@
                             <TextBlock Text="连接" Style="{StaticResource GroupTitle}"/>
                             <Border Style="{StaticResource Card}">
                                 <StackPanel>
+                                    <Grid Margin="0,10">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="*"/>
+                                            <ColumnDefinition Width="Auto"/>
+                                        </Grid.ColumnDefinitions>
+                                        <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
+                                            <TextBlock Text="同步状态" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock x:Name="SyncStatusText" Style="{StaticResource RowHint}"/>
+                                        </StackPanel>
+                                        <Button Grid.Column="1" Content="立即检查"
+                                                Style="{StaticResource MinorBtn}"
+                                                Click="SyncCheckNow_Click"/>
+                                    </Grid>
+
+                                    <Border Height="1" Background="#0F000000"/>
+
                                     <Grid Margin="0,10">
                                         <Grid.ColumnDefinitions>
                                             <ColumnDefinition Width="*"/>

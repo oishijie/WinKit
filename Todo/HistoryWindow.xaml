@@ -51,12 +51,31 @@
                         ToolTip="关闭"/>
             </Grid>
 
-            <!-- 2. 统计栏 -->
-            <TextBlock Grid.Row="1" x:Name="CountText"
-                       Text="0 条已删除待办"
-                       FontSize="11"
-                       Foreground="#888"
-                       Margin="16,0,16,6"/>
+            <!-- 2. 统计栏 + 批量操作 -->
+            <Grid Grid.Row="1" Margin="16,0,16,6">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" x:Name="CountText"
+                           Text="0 条已删除待办"
+                           FontSize="11"
+                           Foreground="#888"
+                           VerticalAlignment="Center"/>
+                <StackPanel Grid.Column="1" Orientation="Horizontal">
+                    <Button x:Name="RestoreSelectedBtn" Content="还原所选"
+                            Style="{StaticResource TitleBarBtn}"
+                            Margin="0,0,6,0"
+                            IsEnabled="False"
+                            Click="RestoreSelectedBtn_Click"
+                            ToolTip="还原勾选的全部待办（Ctrl/Shift 多选）"/>
+                    <Button x:Name="DeleteSelectedBtn" Content="删除所选"
+                            Style="{StaticResource TitleBarBtn}"
+                            IsEnabled="False"
+                            Click="DeleteSelectedBtn_Click"
+                            ToolTip="彻底删除勾选的全部待办（Ctrl/Shift 多选）"/>
+                </StackPanel>
+            </Grid>
 
             <!-- ══════════════════════════════════════════
                  3. 历史列表
@@ -74,6 +93,7 @@
                 <ListBox x:Name="HistoryList"
                          Background="Transparent"
                          BorderThickness="0"
+                         SelectionMode="Extended"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
                          ScrollViewer.VerticalScrollBarVisibility="Auto">
                     <ListBox.Template>

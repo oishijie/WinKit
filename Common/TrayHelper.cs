@@ -268,13 +268,19 @@ namespace WinKit.Common
         /// </summary>
         public void ShowSyncTip(string message)
         {
+            ShowTip("WinKit 同步", message);
+        }
+
+        /// <summary>通用托盘气泡提示（同步 / 更新等模块共用），2 秒自动消失</summary>
+        public void ShowTip(string title, string message)
+        {
             try
             {
-                _icon.ShowBalloonTip(2000, "WinKit 同步", message, SWF.ToolTipIcon.Info);
+                _icon.ShowBalloonTip(2000, title, message, SWF.ToolTipIcon.Info);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"TrayHelper.ShowSyncTip: {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"TrayHelper.ShowTip: {ex.Message}");
             }
         }
 

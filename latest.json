@@ -1,0 +1,9 @@
+{
+  "tag": "v2.3.0",
+  "version": "2.3.0",
+  "publishedAt": "2026-10-29",
+  "zip": "WinKit-v2.3.0-win-x64.zip",
+  "downloadUrl": "https://gitee.com/worhllo/WinKit/releases/download/v2.3.0/WinKit-v2.3.0-win-x64.zip",
+  "mirror": "https://github.com/oishijie/WinKit/releases/download/v2.3.0/WinKit-v2.3.0-win-x64.zip",
+  "note": "WinKit 自动更新版本清单。CNB release API 匿名不可用（401），故用 raw 文件做版本探测；downloadUrl 指向 Gitee（国内最快），mirror 备用。发新版本时同步更新本文件并推送仓库。"
+}

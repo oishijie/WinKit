@@ -164,6 +164,16 @@ namespace WinKit.Common
         /// <summary>拉取成功时气泡提示（默认开）</summary>
         public bool SyncNotifyPull { get; set; } = true;
 
+        // ── Update 自动更新设置 ─────────────────────────
+        /// <summary>自动检查更新：启动后每日静默检查一次，三源择优（默认开）</summary>
+        public bool UpdateAutoCheck { get; set; } = true;
+
+        /// <summary>自动下载更新包：发现新版本即后台下载，关 = 仅气泡提示版本号（默认关）</summary>
+        public bool UpdateAutoDownload { get; set; } = false;
+
+        /// <summary>上次自动检查时间（每日一次的判定依据）</summary>
+        public DateTime? LastUpdateCheckAt { get; set; }
+
         // ── Translate 翻译 & OCR 设置 ───────────────────
         /// <summary>是否启用翻译/OCR 模块及其全局热键</summary>
         public bool TranslateEnable { get; set; } = true;
