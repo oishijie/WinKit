@@ -119,7 +119,7 @@ namespace WinKit.Common
         /// <summary>是否启用剪贴板同步（默认关闭）</summary>
         public bool SyncEnabled { get; set; } = false;
 
-        /// <summary>SyncClipboard 兼容服务器地址，如 https://clip.cro.cc.cd（不以 / 结尾）</summary>
+        /// <summary>SyncClipboard 兼容服务器地址，如 https://your-server.example.com（不以 / 结尾）</summary>
         public string SyncUrl { get; set; } = string.Empty;
 
         /// <summary>服务器用户名（HTTP Basic 认证）</summary>
