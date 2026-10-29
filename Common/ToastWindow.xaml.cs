@@ -108,6 +108,11 @@ namespace WinKit.Common
                     AddButton("存到下载", ToastAction.SaveToDownloads, primary: false);
                     break;
             }
+
+            // XAML 里 ActionsRow 默认 Collapsed（推送场景不占高度），
+            // 这里必须显式展开，否则按钮加进了 ButtonPanel 也看不见。
+            if (ButtonPanel.Children.Count > 0)
+                ActionsRow.Visibility = Visibility.Visible;
         }
 
         private void SetIcon(string strokeHex, string backgroundHex, string geometry)

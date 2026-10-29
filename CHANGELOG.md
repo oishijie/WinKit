@@ -5,6 +5,16 @@
 
 ## [Unreleased]
 
+## [2.3.3] — 2026-10-29
+
+### Fixed 修复
+- **操作卡片上的按钮不显示**（2.3.2 引入）。`ToastWindow.xaml` 里按钮行 `ActionsRow` 默认 `Visibility="Collapsed"`，`RenderContent` 只在「推送」分支显式设回 `Collapsed` 后 return，**「拉取」分支仅往 `ButtonPanel` 里 `AddButton`，从未把 `ActionsRow` 改为 `Visible`**。结果是按钮对象全部创建、也挂进了控件树，但父容器保持折叠，第二行高度为 0——卡片看起来只有图标、标题和副标题。
+  修法：`RenderContent` 末尾按 `ButtonPanel.Children.Count > 0` 判断后显式展开 `ActionsRow`。用「是否真的加到了按钮」而非无条件展开，避免将来某类内容不该有按钮时留出一条空白行。
+- 记录一条经验：这类缺陷**编译期完全看不出来**（0 错误 0 警告），静态交叉核对控件名与事件签名也查不到，只有真正跑起来看界面才会暴露。后续新增卡片类型时，务必确认按钮之外的容器可见性也被打开。
+
+### Changed 变更
+- 版本号 2.3.2 → 2.3.3。
+
 ## [2.3.2] — 2026-10-29
 
 ### Added 新增
