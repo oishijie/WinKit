@@ -371,5 +371,122 @@
             </Setter>
         </Style>
 
+        <!-- ══════════════════════════════════════════════
+             统一浮窗规范
+             ──────────────────────────────────────────────
+             此前每个窗口各自调参数：圆角 10 / 12 两套、投影 12/14/16 三种
+             外加 5 个窗口完全没有投影，同屏时明显不像一套东西。
+             自此处起收归单一来源：
+
+             圆角   Radius12（浮窗统一）/ Radius8（窗口内卡片）
+             投影   WinShadow —— 所有浮窗共用同一组参数
+             按钮   WinBtn / WinBtnPrimary          浅色浮窗
+                    WinBtnDark / WinBtnDarkPrimary  深色工具界面
+
+             原本散落的自造样式（ResultWindow.ResultActionBtn、
+             ToastWindow.ToastButton、EditorWindow.ActionBtn）一律改用这里。
+        ══════════════════════════════════════════════ -->
+        <CornerRadius x:Key="Radius12">12</CornerRadius>
+        <CornerRadius x:Key="Radius8">8</CornerRadius>
+
+        <!-- x:Shared=False：每个窗口拿到独立的 Effect 实例。
+             共享同一实例会被冻结并复用，多窗口同时渲染时出过异常。 -->
+        <DropShadowEffect x:Key="WinShadow" x:Shared="False"
+                          BlurRadius="16" ShadowDepth="2"
+                          Opacity="0.16" Color="Black"/>
+
+        <!-- 浅色浮窗文字按钮：透明底 + 淡边，hover 微亮 -->
+        <Style x:Key="WinBtn" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="#1F000000"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#333333"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="12,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{StaticResource Radius6}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#10000000"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#1C000000"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#B4B4B4"/>
+                                <Setter Property="BorderBrush" Value="#14000000"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 主操作：边框更深、字更重，一眼看出该点哪个 -->
+        <Style x:Key="WinBtnPrimary" TargetType="Button" BasedOn="{StaticResource WinBtn}">
+            <Setter Property="BorderBrush" Value="#3D000000"/>
+            <Setter Property="Foreground" Value="#1A1A1A"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+        </Style>
+
+        <!-- 深色工具界面（图片编辑器）：同一套尺寸与交互，仅换明暗 -->
+        <Style x:Key="WinBtnDark" TargetType="Button">
+            <Setter Property="Background" Value="Transparent"/>
+            <Setter Property="BorderBrush" Value="#33FFFFFF"/>
+            <Setter Property="BorderThickness" Value="1"/>
+            <Setter Property="Foreground" Value="#CCCCCC"/>
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Padding" Value="12,4"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="{StaticResource Radius6}">
+                            <ContentPresenter HorizontalAlignment="Center"
+                                              VerticalAlignment="Center"
+                                              Margin="{TemplateBinding Padding}"/>
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#24FFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#3DFFFFFF"/>
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter Property="Foreground" Value="#5A5A5A"/>
+                                <Setter Property="BorderBrush" Value="#1AFFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="WinBtnDarkPrimary" TargetType="Button" BasedOn="{StaticResource WinBtnDark}">
+            <Setter Property="BorderBrush" Value="#66FFFFFF"/>
+            <Setter Property="Foreground" Value="#FFFFFF"/>
+            <Setter Property="FontWeight" Value="Medium"/>
+        </Style>
+
     </Application.Resources>
 </Application>

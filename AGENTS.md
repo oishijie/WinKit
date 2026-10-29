@@ -23,9 +23,11 @@
 - **热键元数据单一数据源 `Common/HotkeyCatalog.cs`**：全部可配置热键（显示名 / 归属分区 / 配置读写器）只在这里定义一张表，设置窗渲染、冲突检测、录制、模块注册都从它取。新增一条热键只需往 `All` 数组追加一项（并同步模块的动作字典），不再需要改四处数组 + 两个 switch。
 - **录制期间挂起全局热键**：`SettingsWindow.HotkeyRecordingChanged` → `App` 调 `TranslateModule/CaptureModule.SuspendHotkeys()` 注销全部热键，录完 `ResumeHotkeys()` 按最新配置装回。不做这一步的话，用户按下「当前已生效的组合」（如 Alt+S）时按键会被 Windows 直接发给注册者，设置窗收不到键，弹出的截图/翻译窗还会把设置窗顶得失焦、连带取消录制。
 - **热键注册失败会提示**：`HotkeyService.Register` 的返回值不再被忽略，`TranslateModule/CaptureModule` 抛出 `HotkeyRegistrationFailed`，`App` 汇总后在录制结束时弹一次提示；设置窗里与其它项重复的键帽也会直接标红。旧版静默失效，用户会以为「改了没用」。
-- OCR 模型支持热切换：设置窗口切换模型后 `RapidOcrProvider.ReconfigureAsync` 销毁旧引擎并后台预热新引擎，无需重启应用。前后处理类参数（瘦身秒数、深色反色）走 `SameEngineConfig` 判定，只就地更新、不触发重建。
+- OCR 模型支持热切换：设置窗口切换模型后 `RapidOcrProvider.ReconfigureAsync` 销毁旧引擎并后台预热新引擎，无需重启应用。**只有 `Model` / `EnableAngleClassification` / `CpuThreads` 三项会触发重建**（见 `SameEngineConfig`）；瘦身秒数、深色反色、置信度阈值、小字增强都属于前后处理，就地生效、绝不重建。
 - **OCR 结果携带原图坐标**：`OcrResult.Blocks`（元素类型 `OcrTextBlock`）给出每个文本框的文字 + **在原图坐标系中的像素包围盒** + 版面行号 `LineIndex`（同一行的碎片共享该值）。之所以需要换算：`RapidOcrProvider.Prepare` 会因小图放大 / 超大图缩小而产生缩放系数，引擎回传的坐标位于缩放后的空间，`OcrTextLayout.Compose` 按系数除回去并收敛到边界内。下游拿到的即是可以直接在截图上作画的坐标 —— 这是「原文译文逐行对照高亮 / 把译文叠回截图 / 按块单独复制 / 带坐标导出」的共同地基。
-- **深色截图自动反色**：`RapidOcrProvider.IsDarkBackground` 把图缩到长边 32 的缩略图后**只取外圈**采样（中央是内容、四周边带才代表底色），平均亮度低于阈值即判定深色，整图反色后再送识别 —— PP-OCR 识别头按「白底黑字」训练，浅字深底会明显掉字。开关 `OcrAutoInvertDark`，识别成功时状态栏追加「已反色」。
+- **深色截图自动反色（3×3 网格投票）**：`RapidOcrProvider.IsDarkBackground` 把图缩到长边 48 的缩略图后切成 3×3 共 9 格，逐格算平均亮度，**≥2/3 的格子偏暗**才判深色并整图反色 —— PP-OCR 识别头按「白底黑字」训练，浅字深底会明显掉字。为什么不用「整图外圈平均」：深色窗口里嵌浅色对话框、浅色网页里嵌深色终端这类**深浅混排**截图会被判错极性，一次反色把正常的那一半毁掉；混排时按浅色处理，宁可让深色那半掉字也不让浅色那半变乱码。缩略图像素用 `LockBits` + `Marshal.Copy` 批量读，不用 `GetPixel` 逐点跨托管边界。开关 `OcrAutoInvertDark`，状态栏追加「已反色」。
+- **小字增强（两遍制）**：`RapidOcrProvider.ComputeBoostFactor` 用**检出框的中位高度**（不是整图高度！）判断要不要放大重识别。关键换算：引擎 `PPOCRv6` 预设会把短边拉到 736，所以要乘 `736/短边` 才得到「引擎实际看到的行高」，漏算这步会低估小字程度。触发阈值 32px、目标 44px、倍率钳 1.4~2.5、放大后长边硬上限 2600（再大也会被引擎缩回去，白跑）。两轮之间由 `IsBetterResult` 择优：字符总数不能变少、平均置信度不能降超 0.05，否则保留首轮。开关 `OcrSmallTextBoost`，默认开。
+- **置信度是双刃剑，注意别丢**：引擎回传 `TextBlock.CharScores`（逐字符），`ToBlocks` 取均值写入 `OcrTextBlock.Confidence`。⚠️ `OcrTextLayout` 会**重建** `OcrTextBlock`，必须经 `Fragment.Confidence` 搬运，否则置信度在版面重排时被悄悄重置为 1.0（此坑已踩过一次）。过滤阈值 `OcrTextScoreThreshold` 默认 0.5；为了让「滤掉多少块」可统计，引擎侧 `TextScore` 置 0 全量回传，过滤放在本层做。
 - **热键有两种注册机制，别混用**（`HotkeyMechanism`）：普通组合（Alt+S 等）走 `HotkeyService.RegisterHotKey`；**含 Win 键的组合走低级键盘钩子** `Clipboard/Services/KeyboardHookService`（默认的剪贴板唤出键 Win+V 就是这类）。含 Win 的组合被系统保留，`RegisterHotKey` 注册必然失败；钩子还能顺带**吞掉按键**，从而阻止系统自带剪贴板面板弹出。改键时两种机制都要照顾到。
 - **热键按归属分三类，新增时先想清楚归哪类**（`HotkeyCatalog` 是唯一数据源，新增一条只需改 catalog —— UI、冲突检测、录制、注册全部自动跟上）：
   ① **模块热键**（`HotkeyOwner.Translate` / `Capture`）—— 各模块持有自己的 `HotkeyService`，按 `descriptor.Owner` 过滤后注册；
@@ -49,14 +51,26 @@
   - **⚠️ CNB 不能做匿名探测源（2026-10-29 实测）**：CNB 的 release API、`/-/git/raw/*`、`/-/git/contents/*` 对匿名请求**一律 401**（公共仓库也一样），网页 `/-/raw/` 返回 SPA 的 "Page not found" HTML（**HTTP 200 但内容是 HTML**，只看状态码会被骗）。因此版本探测只走 **Gitee API + GitHub 302** 两条路，CNB 仅作**下载镜像**（附件下载匿名可用，支持 Range/206）。下载前 `PickFastestMirrorAsync` 对 Gitee/GitHub/CNB 三镜像发 Range 请求测 TTFB 选最快（实测 CNB 1.17s < Gitee 1.58s < GitHub 3.58s）。
 - **低级键盘钩子的三条铁律**（`KeyboardHookService` 类注释里有完整说明，这里列要点）：① 回调必须极快返回 —— Windows 的 `LowLevelHooksTimeout`（默认 300ms）超时会**静默移除钩子且不通知**，此后热键彻底失效直到重装，因此回调内只做「判定 + 投递」，窗口操作一律 `Dispatcher.BeginInvoke` 异步做；② 回调内异常绝不能逃逸（异常穿过 P/Invoke 边界同样会移除钩子）；③ 修饰键状态由钩子自维护，不在回调里现查 `GetAsyncKeyState`。装钩/卸钩会写日志到 `%APPDATA%/WinKit/hotkey.log`。
 - **钩子型热键的录制通道**：含 Win 的组合到不了 WPF 键盘事件，只有钩子看得见。因此录制期间**钩子不挂起**（与 `HotkeyService` 那批相反），而是由 `App.OnHookHotkey` 判断 `SettingsWindow.IsRecordingHotkey`，把 `(VK, Modifiers)` 转给 `SettingsWindow.FeedHotkeyInput` 提交。若把钩子也挂起，按 Win+V 会落到系统手里、弹出系统剪贴板并顶掉设置窗焦点。
-- **OCR 并发语义：新触发取消旧触发**（不是忽略）：`TranslateModule.RunAsync` 持一个 `CancellationTokenSource`，新请求进来先 `Cancel` 旧的，token 一路传到 `OcrAsync` → `IOcrProvider.RecognizeAsync`。注意原生推理不可中断，「取消」的生效点在于**排队等信号量那一段**，以及**每一步界面写入前的 token 检查**（长识别跑完后结果会被丢弃，不会覆盖界面）。`CaptureModule` 保持「忽略并发」—— 那边是要避免开出多个全屏选区窗口。
+- **OCR 并发语义：新触发取消旧触发**（不是忽略）：`TranslateModule.RunAsync` 持一个 `CancellationTokenSource`，新请求进来先 `Cancel` 旧的，token 一路传到 `OcrAsync` → `IOcrProvider.RecognizeAsync`。v2.4 起走 `DetectAsync`，token 会进 ONNX `RunOptions.terminate`（**每个 kernel 检查一次**），因此 detection 这段最长的也能被打断 —— 旧实现用同步 `Detect`，取消只在排队等信号量时生效，跑起来就只能白跑到完再丢结果。`CaptureModule` 保持「忽略并发」—— 那边是要避免开出多个全屏选区窗口。
+- **结果窗的隐藏时机（v2.4 重做，别改回去）**：`ResultWindow.SetLoading` 置 `_busy = true`、`SetResult` 置 `false`，`Window_Deactivated` 在 `_busy` 为真时**直接 return、不隐藏**。旧逻辑「失焦即隐藏」不区分状态：用户按 `Alt+Shift+S` 后，在识别跑完前切到软件内其它页面（或干脆切到浏览器 / 编辑器 / 聊天窗），窗口当场消失，随后结果写进这个已隐藏的窗口 —— 用户看到的是「识别被打断」，实际上它一直跑到了最后。`Deactivated` 对**任何**失焦都触发，所以这一处同时覆盖「切软件内页面」和「切别的程序」两种场景，别再为后者单独加判断。配套两条不能漏：
+  ① `TranslateModule.OnResultWindowVisibilityChanged` 必须带 `&& !w.IsBusy` 才调 `RequestSlimNow()`。否则窗口一隐藏就连带卸载推理实例，下次识别冷启动数秒，观感上又是一次「卡住」。
+  ② `RapidOcrProvider.RecognizeAsync` 开头 `CancelSlim()`，且取消分支与 `finally` 都要 `ScheduleSlim()`。`CancelSlim` 的注释一直写着「即将开始一次识别时调用」，但 v2.3.3 及之前**全项目只有 1 个调用点**（且在关闭瘦身那条分支里），等于长识别一旦撞上闲置计时器，识别结束的瞬间引擎就被卸载。
+  收尾逻辑：`EndBusy` 若发现窗口当前无焦点（说明用户早切走了），启动 3.5 秒的 `_autoHide` 让结果停留一下再收起 —— 既不「一闪就没」，也不让置顶窗永远挡着别的程序；`Activated` 一律取消它。另有 30 秒 `_busyGuard` 兜底：链路被「静默 OCR」顶掉时那条不会走 `SetResult`，没有它窗口会永久卡在「识别中…」且永不自动隐藏。
+- **结果窗布局契约（v2.4）**：`StatusText` 独占第二行（22px），**不要再塞回标题行**。它要显示 `RapidOCR · PP-OCRv6 Small · 14 块 · 420 ms · 置信 92% · 小字增强 · 已反色`，放标题行会被两侧按钮压得只剩省略号，等于刚加上的置信度白算。标题行结构固定为：标题（`*` 列）＋ `[复制][翻译][搜索]` 成组＋ `[📌][✕]` 最右；三个操作钮统一 `MinWidth = 42`（旧版复制固定 56 宽、翻译搜索按 padding 自适应，三个按钮宽度参差）。
 - **识别历史**：`Translate/Services/OcrHistoryStore.cs` 复用剪贴板同一个库（`%APPDATA%/WinKit/clipboard.db`）的 `ocr_history` 表，另开一条自己的连接并设 `busy_timeout`（WAL 下与 `ClipboardManager` 的常驻连接并存）。`TranslateModule.OcrAsync` 在识别成功后统一记账，三条链路（截图翻译 / 文字识别 / 静默 OCR）自动全覆盖。上限由 `OcrHistoryMaxItems` 控制，UI 在设置中心「翻译与 OCR → 识别历史」。写库失败只记日志，不影响识别主流程。
 - **⛔ 发布体积约束（v2.1.3 起，动依赖前先读这段）**：OCR 引擎已由 Paddle Inference 换成 **ONNX Runtime**，解压后 **413MB → 69MB**、分发包 zip **168.8MB → 44.3MB**。四条不能破的规则：
   ① **必须锁 RID**：`<RuntimeIdentifier>win-x64</RuntimeIdentifier>` + `<AppendRuntimeIdentifierToOutputPath>false</AppendRuntimeIdentifierToOutputPath>`。不加时 NuGet 会把 OnnxRuntime / SkiaSharp 的**全平台**原生资产平铺进 `runtimes\`（Android `.aar`、iOS `.xcframework.zip`、二十余个 Linux 的 `.so`）—— **实测 378MB**；加 RID 后该目录整个消失、原生库平铺到根目录。⚠️ 改 RID 后必须清 `bin/Release` + `obj/Release`，否则旧的全平台产物不会被自动删除。
   ② **模型放在 `models/`**（随仓库提交，由 csproj 复制规则带进输出），档位只有 **Small / Tiny** 两档 —— PP-OCRv6 单模型即多语言（简繁中文 / 英文 / 日文 + 46 种拉丁语系），**不要再拆「中英文 / 英文专用」**。
   ③ **`PaddleOCRSharp` 与 `Paddle.Runtime.win_x64` 已彻底移除**：那套 `libs/` 的五个大 DLL 互相咬死（`mklml` 88M ← `paddle_inference`、`paddle_yt_phi` 44M ← `paddle_inference`…），**在 Paddle 框架内最多只能压到 350MB**，别回头再试。
   ④ **`OcrTextLayout` 不感知具体引擎**：它只吃项目自有矩形块（`OcrTextBlock`），已解除对 `PaddleOCRSharp.TextBlock` 的依赖 —— 换引擎只需改 `Translate/Services/` 下的 Provider，版面层与下游一律不动。
-  引擎特有坑（`RapidOcrProvider`）：`RapidOcrOptions.Default` **不能配 v6**（其 1024 长边上限 + 50px 白边是为 v5 调的，会让 v6 检测器分辨率不足），必须用 `PPOCRv6` 预设；`TextBlocks` / `BoxPoints` 是**数组**，用 `.Length`（写 `.Count` 会被解析成 LINQ 扩展方法，报 `CS0019`）；`RapidOcr` 只接受 `SKBitmap`，`Bitmap → SKBitmap` 走逐行 `Marshal.Copy`，因此 `Prepare` 输出为 **32bpp**（`Bgra8888` + `Opaque` 是唯一无需二次转换的匹配格式）。
+  引擎特有坑（`RapidOcrProvider`）：
+  - `RapidOcrOptions.Default` **不能配 v6**（其 1024 长边上限 + 50px 白边是为 v5 调的，会让 v6 检测器分辨率不足），必须用 `PPOCRv6` 预设（= PythonCompat，短边自适应到 736、无白边）。
+  - **大图缩放上限 `MaxSideLen = 2048`**（v2.4 从 960 提上来）：原值会把 4K 整屏压到 0.25 倍、12px 正文变 4px。只对最长边 >`LargeImageSideThreshold`(3000) 的图生效，1080p / 2K 选区根本不走这条分支。若将来嫌 4K 整屏慢，**不要往回改 960**，正解是做分块识别（每块原生分辨率 + 重叠去重）。
+  - **取消要用 `DetectAsync`**（`engine.DetectAsync(skImage, options, progress, ct)`），同步 `Detect` 不可中断。`DetectAsync(SKBitmap, RapidOcrOptions, IProgress<(int,int)>, CancellationToken)` 与路径重载并存。
+  - **置信度字段是 `CharScores`**（逐字符，取均值即为行置信度）；字级/词级框在 v4.2.0 走 `ReturnWordBox`，但 `WordResults` 的元素类型未在本仓库验证过 —— 要启用字级坐标（划词翻译）前，先用反射或源码确认其属性名，别照 README 猜。
+  - `TextBlocks` / `BoxPoints` 是**数组**，用 `.Length`（写 `.Count` 会被解析成 LINQ 扩展方法，报 `CS0019`）。
+  - `RapidOcr` 只接受 `SKBitmap`，`Bitmap → SKBitmap` 走逐行 `Marshal.Copy`，因此 `Prepare` 输出为 **32bpp**（`Bgra8888` + `Opaque` 是唯一无需二次转换的匹配格式）。
+  - **字典文件名是 `PP-OCRv6_*_dict.txt`（大写 PP）**，与官方预设要求的 `ppocrv6_*_dict.txt` 不一致。目前路径全部由 `OcrModelCatalog.Resolve` 显式传入所以没事；将来若改用 `RapidOcrModelSet` 预设，必须先把文件名改小写，否则会报「模型在目录里却显示缺失」。
 
 ## 当前状态与下一步
 - v2.1.0：快捷键 UI 可配置、剪贴板图片支持 + 截图功能、OCR 模型热切换、DPAPI 加密、Pin 钉住、SQLite 连接优化、**单实例保护（Mutex + 唤醒已有实例）**、**剪贴板图片内容级去重（像素哈希）**、**Todo 完成态持久化（`- [x]` 任务列表格式 + 双击已完成删除）**。

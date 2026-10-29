@@ -41,11 +41,41 @@ namespace WinKit.Translate.Models
         /// </summary>
         public bool AutoInverted { get; set; }
 
+        /// <summary>
+        /// 全部文本框的平均置信度（0~1）。无块时为 0。
+        ///
+        /// 这是「这次识别有多可信」的单一量化指标：
+        ///   · ≥0.90 通常意味着文字清晰、结果可直接使用；
+        ///   · 0.70~0.90 属于常见范围（截图含抗锯齿小字、混排时略低）；
+        ///   · &lt;0.70 建议提示用户核对，往往对应模糊图、极端小字或深浅混排背景。
+        /// </summary>
+        public double AverageConfidence { get; set; }
+
+        /// <summary>
+        /// 本次是否启用了「小字增强」（放大后二次识别）。
+        /// 触发条件是首轮检出框偏小；状态栏据此提示，便于用户理解耗时为何偏长。
+        /// </summary>
+        public bool SmallTextBoosted { get; set; }
+
+        /// <summary>
+        /// 被置信度阈值过滤掉的候选框数量。
+        /// 典型来源是图标、边框、噪点被误检成文字；数字偏大说明画面纹理复杂。
+        /// </summary>
+        public int FilteredBlocks { get; set; }
+
         public static OcrResult Ok(string text) =>
             new() { Text = text, Success = true };
 
-        public static OcrResult Ok(string text, IReadOnlyList<string> lines, long elapsedMs, int blockCount,
-                                   bool autoInverted = false, IReadOnlyList<OcrTextBlock>? blocks = null) =>
+        public static OcrResult Ok(
+            string text,
+            IReadOnlyList<string> lines,
+            long elapsedMs,
+            int blockCount,
+            bool autoInverted = false,
+            IReadOnlyList<OcrTextBlock>? blocks = null,
+            double averageConfidence = 0,
+            bool smallTextBoosted = false,
+            int filteredBlocks = 0) =>
             new()
             {
                 Text = text,
@@ -55,6 +85,9 @@ namespace WinKit.Translate.Models
                 BlockCount = blockCount,
                 AutoInverted = autoInverted,
                 Blocks = blocks ?? Array.Empty<OcrTextBlock>(),
+                AverageConfidence = averageConfidence,
+                SmallTextBoosted = smallTextBoosted,
+                FilteredBlocks = filteredBlocks,
             };
 
         public static OcrResult Fail(string error) =>

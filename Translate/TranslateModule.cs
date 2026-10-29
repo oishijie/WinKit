@@ -106,6 +106,11 @@ namespace WinKit.Translate
 
         private void OnSettingsChanged(object? sender, AppSettings settings)
         {
+            // 结果窗背板跟随「窗口不透明度」。TrayHelper 只管两个常驻主窗口，
+            // 结果窗实例在模块这边，必须单独推送 —— 否则拖滑块时用户看的那个
+            // 窗口恰恰是唯一不响应的。
+            _resultWindow?.SetBackdropOpacity(settings.WindowOpacity);
+
             if (_ocr is RapidOcrProvider paddle)
             {
                 // Reconfigure 内部走 WaitAsync 而非同步 Wait，绝不阻塞 UI 线程；
@@ -346,18 +351,18 @@ namespace WinKit.Translate
             if (region == null || ct.IsCancellationRequested) return;
 
             var window = EnsureResultWindow();
-            window.SetLoading("文字识别", "识别结果", OcrLoadingHint());
+            window.SetLoading("文字识别", "", OcrLoadingHint());
             window.ShowAtMouse();
 
             var ocr = await OcrAsync(region.Value, ct).ConfigureAwait(true);
             if (ct.IsCancellationRequested) return;
             if (!ocr.Success || string.IsNullOrWhiteSpace(ocr.Text))
             {
-                window.SetResult("文字识别", "识别结果", "", status: ocr.Error ?? "未识别到文字", success: false);
+                window.SetResult("文字识别", "", "", status: ocr.Error ?? "未识别到文字", success: false);
                 return;
             }
 
-            window.SetResult("文字识别", "识别结果", ocr.Text, actionText: ocr.Text, status: OcrStatus(ocr));
+            window.SetResult("文字识别", "", ocr.Text, actionText: ocr.Text, status: OcrStatus(ocr));
         }
 
         /// <summary>Alt+Shift+F 静默 OCR：截图 → OCR → 自动复制到剪贴板（不弹窗）</summary>
@@ -453,10 +458,19 @@ namespace WinKit.Translate
         private string OcrLoadingHint() =>
             _ocr.IsReady ? "识别中…" : "正在加载本地 OCR 模型（约需数秒）…";
 
-        /// <summary>识别成功后的状态栏文案（含模型回退与深色反色提示）</summary>
+        /// <summary>
+        /// 识别成功后的状态栏文案（含置信度、小字增强、深色反色与模型回退提示）。
+        ///
+        /// 置信度是「这次识别有多可信」的单一量化指标，直接摆出来比让用户
+        /// 对着结果猜「这行乱码到底是原文还是识别错了」有用得多。
+        /// </summary>
         private string OcrStatus(Models.OcrResult ocr)
         {
             var text = $"{_ocr.Name} · {ocr.BlockCount} 块 · {ocr.ElapsedMs} ms";
+            if (ocr.AverageConfidence > 0)
+                text += $" · 置信 {ocr.AverageConfidence:P0}";
+            if (ocr.SmallTextBoosted)
+                text += " · 小字增强";
             if (ocr.AutoInverted)
                 text += " · 已反色";
             if (_ocr is RapidOcrProvider p && p.FallbackNotice != null)
@@ -607,6 +621,8 @@ namespace WinKit.Translate
             return Application.Current.Dispatcher.Invoke(() =>
             {
                 _resultWindow = new ResultWindow();
+                // 创建即按当前设置着色，避免弹出瞬间用 XAML 里硬编码的 #CCFFFFFF 闪一下
+                _resultWindow.SetBackdropOpacity(_settingsManager.Settings.WindowOpacity);
                 // 结果窗右下角「翻译 / 搜索」按钮 → 回传识别文本由模块处理
                 _resultWindow.TranslateRequested += OnTranslateRequested;
                 _resultWindow.SearchRequested += OnSearchRequested;
@@ -619,7 +635,10 @@ namespace WinKit.Translate
         /// <summary>结果窗隐藏后立即触发 OCR 引擎瘦身（卸载原生推理实例并压缩工作集）</summary>
         private void OnResultWindowVisibilityChanged(object? sender, DependencyPropertyChangedEventArgs e)
         {
-            if (sender is ResultWindow w && !w.IsVisible && _ocr is RapidOcrProvider paddle)
+            // 识别进行中绝不瘦身：窗口隐藏（截图前统一隐藏自身 UI、或用户手动关掉）
+            // 不代表引擎已闲置。此刻卸载推理实例，下一次识别就得重新加载模型数秒 ——
+            // 这正是「切个页面回来像卡住了」的观感来源。
+            if (sender is ResultWindow w && !w.IsVisible && !w.IsBusy && _ocr is RapidOcrProvider paddle)
                 paddle.RequestSlimNow();
         }
 

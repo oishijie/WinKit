@@ -16,9 +16,10 @@
 
     <!-- 主容器：与 Clipboard / Todo 同款圆角毛玻璃卡片 -->
     <Border Background="#CCFFFFFF"
-            CornerRadius="10"
+            CornerRadius="{StaticResource Radius12}"
             BorderBrush="#22000000"
-            BorderThickness="1">
+            BorderThickness="1"
+            Effect="{StaticResource WinShadow}">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="40"/>

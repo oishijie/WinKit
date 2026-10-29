@@ -287,26 +287,11 @@ namespace WinKit.Common
         // ── 不透明度操作 ────────────────────────────────────────
         private void ApplyOpacity(int opacity)
         {
-            // 计算 Alpha 通道值 (0-255) 并转换为 #AARRGGBB 格式
-            int alpha = (int)Math.Round(opacity / 100.0 * 255);
-            string hex = $"#{alpha:X2}FFFFFF";
-            var color = (System.Windows.Media.Color)
-                System.Windows.Media.ColorConverter.ConvertFromString(hex);
-            var brush = new System.Windows.Media.SolidColorBrush(color);
-
-            // 直接设置两个主窗口的 RootBorder.Background
-            _todoWindow.Dispatcher.Invoke(() =>
-            {
-                var border = ((System.Windows.FrameworkElement)_todoWindow.Content)
-                             as System.Windows.Controls.Border
-                             ?? _todoWindow.FindName("RootBorder") as System.Windows.Controls.Border;
-                if (border != null) border.Background = brush;
-            });
-            _pasteWindow.Dispatcher.Invoke(() =>
-            {
-                var border = _pasteWindow.FindName("RootBorder") as System.Windows.Controls.Border;
-                if (border != null) border.Background = brush;
-            });
+            // 背板着色统一走 WindowBackdrop。这里只负责两个常驻主窗口 ——
+            // 识别结果窗由 TranslateModule 自行推送（窗口实例在那边）。
+            // 其余按需打开的窗口（历史 / 设置 / 关于）仍用 XAML 里的固定值，不跟随。
+            _todoWindow.Dispatcher.Invoke(() => WindowBackdrop.Apply(_todoWindow, opacity));
+            _pasteWindow.Dispatcher.Invoke(() => WindowBackdrop.Apply(_pasteWindow, opacity));
         }
 
         /// <summary>

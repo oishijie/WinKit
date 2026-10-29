@@ -3,7 +3,46 @@
 统一桌面助手：TodoList + Clipboard + 截图标注 + 本地 OCR 翻译。
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)；版本号见 `WinKit.csproj` 的 `<Version>`。
 
-## [Unreleased]
+## [2.4.0] — 2026-10-29
+
+### Fixed 修复
+- **【严重】所有设置从未成功落盘过**（用户报告：透明度滑块「没生效」）。这一条的实际影响远不止透明度——**任何**设置项改完都只在本次运行内有效，退出即回默认值。根因在 `SettingsManager.SaveSettings` 的 DPAPI 加密环节：重新序列化时对非敏感字段调用了 `JsonElement.WriteTo(writer)`，而该方法**只写值、不写属性名**；`WriteStartObject()` 之后 writer 正停在「等待属性名」状态，收到一个 `StartObject` 值即抛 `InvalidOperationException: Cannot write a JSON value within an object without a property name`。`AppSettings` 的 60 个属性里只有 2 个敏感字段（`OpenAIApiKey` / `SyncPassword`）走带 name 的 `WriteString` 重载，其余 58 个全部命中这条错误路径 → **每次保存必然失败**。已补 `writer.WritePropertyName(prop.Name)`。
+  - 为什么长期未被发现：旧代码把 `SettingsChanged?.Invoke` 写在 `try` 内部、异常分支只有一句 `Debug.WriteLine`（**Release 构建下整行被编译器剔除**）。于是「内存里已改、界面毫无反应、磁盘零痕迹、连错误日志都没有」四件事同时成立。现已将事件通知移出 `try`（配置生效不再取决于磁盘写成功）、写盘改为 `.tmp` + `File.Move` 原子替换、失败落 `%APPDATA%/WinKit/settings-error.log`。**这次正是靠这份新日志拿到了完整堆栈才定位到行号。**
+  - 副作用修复：因该文件自 DPAPI 上线后从未被成功写过，其中 `SyncPassword` 一直是 **12 字符明文**。升级后首次保存会自动迁移为 DPAPI 密文。
+- **识别中切到别的窗口，结果「凭空消失」**（用户报告：一换页面识别就像被打断了）。根因是三层叠加，**没有一层是取消识别**：
+  ① `ResultWindow.Window_Deactivated` 不区分状态，失焦一律 `Hide()` —— 识别跑到一半用户切走，窗口当场消失；
+  ② 窗口隐藏触发 `IsVisibleChanged` → `RequestSlimNow()`，把推理实例一并卸载了；
+  ③ `RapidOcrProvider.CancelSlim` 的注释写着「即将开始一次识别时调用」，但**全项目从未在识别开始时调用过它**（唯一调用点在「关闭瘦身开关」那条分支里），闲置计时器无人取消。
+  实际识别一直跑到了最后，结果只是写进了一个隐藏窗口，下次热键还要冷启动 3~5 秒 —— 于是看起来像「被打断」。因为 `Deactivated` 对任何失焦都触发，切软件内页面与切到别的程序是同一条路径，一处修完两种场景一起解决。
+- **「MKL-DNN 加速」是个彻底的假开关**（Paddle → ONNX 迁移遗留）。设置页有开关、文案写着「Intel CPU 上显著提速」，`OcrEngineOptions.SameEngineConfig` 还把它算进重建判据，但 `RapidOcrProvider.BuildEngine` **从头到尾没读过这个值**——用户拨动它只会白等 1~3 秒引擎重建，然后什么都不会发生。已连同字段、设置项、事件处理器一并删除。
+- **4K 整屏被压到 960px，小字直接不可读**。`MaxSideLen = 960` 会对最长边 >3000px 的图生效，3840×2160 的 4K 整屏被缩到 960×540（0.25 倍），12px 正文变成约 4px 再送进识别头。RapidOCR 官方默认 `max_side_len` 是 2000，本项目取了不到一半。已提到 **2048**（32 的整数倍，便于张量对齐）。常规 1080p / 2K 选区走不到这个分支，不受影响。
+- **小字放大判据看错了对象**。旧逻辑用**整图高度** < 48px 判断要不要放大，但一个 900px 高的代码块里正文只有 12px——整图够高就永远不放大，小字原样喂给按 48px 行高训练的识别头。已改为按**检出框的中位高度**判断（见新增的「小字增强」）。
+- **置信度被整段丢弃**。引擎回传了逐字符置信度（`TextBlock.CharScores`），`ToBlocks` 只取了文本和坐标，等于把「哪一行不可信」这个信号扔了。现在每块都带 `Confidence`，并一路传到版面层——顺带修掉一个隐蔽缺陷：`OcrTextLayout` 会重建 `OcrTextBlock`，若不同步搬运置信度，它会在版面重排时被悄悄重置为 1.0。
+
+### Added 新增
+- **小字增强（两遍制）**：首轮识别后若检出框中位高度（换算到引擎实际尺度）低于 32px，按目标 44px 行高整体放大再识别一遍，两轮之间按「字符总数 + 平均置信度」择优采用——字符变少或置信明显下降就保留首轮，避免放大反而把检测搞崩。放大倍率钳在 1.4~2.5，且受长边 2600px 硬上限约束（再大也会被引擎缩回去，白跑）。开关 `OcrSmallTextBoost`，默认开；状态栏显示「小字增强」。
+- **置信度过滤**：低于阈值（`OcrTextScoreThreshold`，默认 0.5，与 RapidOCR 官方 `text_score` 一致）的块直接丢弃，滤掉图标、边框、页面纹理被误检成"文字"的垃圾块。为能统计「滤掉了多少」，引擎侧 `TextScore` 置 0 全量回传，过滤改在本层做。`OcrResult` 新增 `AverageConfidence` / `SmallTextBoosted` / `FilteredBlocks`。
+- **状态栏显示置信度**：`RapidOCR · PP-OCRv6 Small · 14 块 · 420 ms · 置信 92%`。这是「这次识别有多可信」的单一量化指标，比让用户对着乱码猜有用。
+- **结果窗布局重排**：`StatusText` 从「夹在复制与翻译/搜索之间」改为独占第二行，`置信 92% · 小字增强 · 已反色` 不再被两侧按钮挤压截断；标题行改为「标题 ＋ `[复制][翻译][搜索]` 成组 ＋ `📌 ✕` 最右」，三个操作钮统一 `MinWidth = 42`（旧版复制固定 56 宽、另两个按 padding 自适应，宽度参差）。三行结构由 `26 / 36 / *` 调整为 `36 / 22 / *`，头部反而省下 4px。
+- **识别可真正中断**：改用 `DetectAsync`，`CancellationToken` 一路传进 ONNX `RunOptions`，每个 kernel 检查一次 terminate 标志——连 detection 这段最长的也能被打断。旧实现是同步 `Detect` 包在 `Task.Run` 里，取消只在「排队等信号量」那一段生效，识别一旦跑起来只能等它跑完再丢结果，白烧 CPU。
+- **`Common/WindowBackdrop.cs`**：窗口背板着色收敛成单一实现（`FromPercent` / `Apply(Window)` / `Apply(Border)`，钳位 20~100%）。此前「透明度」设置只作用于 Todo 与剪贴板两个窗口，且着色代码硬编码在 `TrayHelper` 里；ResultWindow 等其余窗口各自硬编码 `#CCFFFFFF`，滑块拖到 40% 它纹丝不动——这才是用户看到「没生效」的直接原因。
+- **识别结果窗接入透明度设置**：`ResultWindow.SetBackdropOpacity()`，由 `TranslateModule` 在窗口创建时与每次 `SettingsChanged` 时推送。
+- **设置保存错误日志**：`%APPDATA%/WinKit/settings-error.log`，仅在异常时追加（含类型、消息、完整堆栈），超过 64KB 自动重开一份。
+
+### Changed 变更
+- **深色反色改为 3×3 网格投票**。旧实现只看整图外圈平均亮度，「深色窗口里嵌浅色对话框」这类深浅混排截图会整图判错极性，一次反色把正常的那一半毁掉。现在缩到 48px 长边切 9 格逐格判定，只有 ≥2/3 的格子偏暗才整图反色；混排时保守按浅色处理——宁可让深色那一半掉字，也不能让浅色那一半变乱码。缩略图读取也从逐点 `GetPixel` 换成了 `LockBits` 批量拷贝。
+- **文字方向分类默认改为开启**。分类模型仅 1MB、开销占全流程 3~5%，关掉的代价是倒置文字（翻转截图、拍屏照片）直接出乱码——典型的省小时间丢大片正确率。已有配置不受影响，仍按用户存下的值走。
+- **`IOcrProvider` 接口补齐**：新增 `ReconfigureAsync`、`RequestSlimNow`、`InitializationError`。此前这三者只长在 `RapidOcrProvider` 上，调用方得靠 `_ocr is RapidOcrProvider paddle` 做类型转换才能用——抽象层等于形同虚设，换引擎就得连调用方一起改。
+- **结果窗在识别期间不再因失焦隐藏**：`SetLoading` → `SetResult` 之间 `_busy` 为真，`Deactivated` 直接返回，切软件内页面或切到别的程序都能看到进度与最终结果。识别完成时若窗口已失焦，再停 3.5 秒才收起（期间 `Activated` 会取消该定时器）；另有 30 秒兜底复位，防止链路被「静默 OCR」顶掉后窗口永久卡在「识别中…」且永不自动隐藏。
+- **窗口隐藏不再连带卸载引擎**：`TranslateModule.OnResultWindowVisibilityChanged` 增加 `&& !w.IsBusy` 判断；`RapidOcrProvider.RecognizeAsync` 开头补上 `CancelSlim()`，取消分支与 `finally` 都恢复 `ScheduleSlim()`（原本取消分支会直接 return，计时器永久停在取消态、引擎从此不再瘦身）。
+- 设置页「翻译与 OCR」分区：移除「MKL-DNN 加速」，原位置替换为「小字增强」（同一行布局，未新增区块）。
+- **建立全局视觉规范单一来源**（`App.xaml` 新增 7 个键），删掉三份窗口私有副本（`ResultWindow.ResultActionBtn`、`ToastWindow.ToastButton/ToastButtonPrimary`、`EditorWindow.ActionBtn`）：`Radius12` / `Radius8`（浮窗 / 窗内卡片）、`WinShadow`（16/2/0.16，`x:Shared="False"` 保证每窗独立实例，避免共享 `DropShadowEffect` 在多层窗口同时渲染时互相干扰）、`WinBtn` / `WinBtnPrimary`（浅色浮窗）、`WinBtnDark` / `WinBtnDarkPrimary`（深色工具界面，同尺寸同交互）。此前阴影有 4 套互不相同的参数、5 个窗口完全没有阴影，圆角则是 8 个窗口 10 + 通知卡 12。
+  - 顺带消除一个隐患：`EditorWindow` 曾自定义 `ActionBtn`，与全局同名——窗口级资源会**静默覆盖**全局定义，改全局样式对它无效。
+- **结果窗按「卡片化」重排**：标题行只留标题与 `📌 ✕`（按钮常态 0.5 透明、鼠标进标题栏提到 1，钉住时保持常亮，不再强制常显）；原文 / 结果各自成为 `#0A000000` + 圆角 8 的卡片块，并有 8px 间距，取代原来那条 1px 分隔线；`[复制]` 采用 Primary 变体（深边 + Medium）区分主操作、`[翻译] [搜索]` 为次级，三钮统一 `MinWidth = 42`；底部补 `ResizeGrip`——此前 `ResizeMode="CanResize"` 却没有任何抓手，用户不知道窗口能拖大。窗口由 440×340 调整为 460×360，`RootBorder` 留 `Margin=10` 给投影让位（`AllowsTransparency` 窗口的绘制会被裁到窗口矩形，不留边则外扩阴影全被切掉）。
+  - 纯识别场景（`Alt+Shift+S`）不再显示「识别结果」小标签：窗口标题已写明「文字识别」，块内重复一次是冗余信息。翻译场景仍保留「原文 / 译文」——那时确实需要区分。
+- **图片编辑器工具条规范化（保持深色底）**：工具条由「工具｜撤销重做｜复制 另存为 关闭」挤在一行，改为三段分组（工具 / 历史 / 导出），`✕` 从导出组拆出单独靠最右；选中态由纯亮蓝 `#0A6CFF` 实心块改为淡蓝底 `#261A8CFF` + 蓝字 `#7FB8FF`（实心块亮度太高，抢画面判断）；状态文字从工具条最右移到底部独立一条，不再与按钮争宽度。**底色的深浅不参与「统一」**——看图与标注需要中性暗底才能准确判断颜色与对比度，统一的是圆角体系、按钮尺寸/字号、主次分级与 hover 强度。
+- **框选提示条**：圆角 6→8 对齐规范，「ESC 取消」降为半透明次级信息，「拖拽选择识别区域」保持主信息。
+- 其余 6 个窗口（Todo / 剪贴板 / 历史 / 编辑对话框 / 关于 / 设置页）只替换圆角与阴影来源，布局未动。
 
 ## [2.3.3] — 2026-10-29
 

@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Drawing2D;
 using System.Drawing.Imaging;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -20,13 +21,23 @@ namespace WinKit.Translate.Services
     /// 与旧的 Paddle 方案相比，核心收益是**体积**：
     ///   · 原生运行时从约 386MB（paddle_inference + mklml + opencv_world + mkldnn）
     ///     降到约 13MB（onnxruntime.dll）；
-    ///   · 模型是官方 PP-OCRv6 权重导出的 ONNX，与 Paddle 版**同源**，识别结果一致；
+    ///   · 模型是官方 PP-OCRv6 权重导出的 ONNX，与 Paddle 版**同源**；
     ///   · 方向分类沿用 v5 分类器（PP-OCRv6 不自带分类模型）。
     ///
     /// 三个必须照顾到的现实约束（与原实现一致）：
     ///   1. 初始化较慢——冷启动约 1~3 秒，因此引擎常驻、懒加载，并由外部提前预热；
     ///   2. 原生引擎非线程安全——所有推理调用用信号量串行化；
     ///   3. 原生调用是阻塞的——统一放到线程池执行，绝不占用 UI 线程。
+    ///
+    /// v2.4 的四处识别质量改造（对应 RapidOCR 官方调参实践）：
+    ///   A. **大图缩放上限 960 → 2048**：原值会让 4K 整屏被压到 0.25 倍，
+    ///      12px 正文变 4px 直接不可读；RapidOCR 官方默认 max_side_len 是 2000。
+    ///   B. **小字增强（两遍制）**：首轮检出框偏小时，按目标行高整体放大后再识别一遍，
+    ///      两轮之间按「字符总数 + 平均置信度」择优。解决「整图够高、但字很小」的盲点。
+    ///   C. **置信度过滤**：引擎本来就回传逐字符置信度，之前被整段丢弃。
+    ///      现在低于阈值的块直接丢弃（滤掉图标/边框误检），并把均值带进结果。
+    ///   D. **真取消**：改用 DetectAsync，调用方的 CancellationToken 会一路传进
+    ///      ONNX RunOptions，每个 kernel 检查一次 —— 旧实现跑完才丢弃结果，白烧 CPU。
     /// </summary>
     public sealed class RapidOcrProvider : IOcrProvider
     {
@@ -36,17 +47,49 @@ namespace WinKit.Translate.Services
         private const double MaxUpscale = 4.0;
         private const int MaxUpscaledSide = 4000;
 
-        /// <summary>超大截图兜底：检测阶段最长边上限（对标 SnapFind 的 max_side_len=960）</summary>
-        private const int MaxSideLen = 960;
+        /// <summary>
+        /// 超大截图兜底：检测阶段最长边上限。
+        ///
+        /// 对齐 RapidOCR 官方默认 max_side_len=2000 并向上取到 2048（32 的整数倍，便于张量对齐）。
+        /// 旧值是 960 —— 那是缩略图预检的量级，拿来直接识别 4K 整屏会把 12px 正文压到 4px，
+        /// 等于主动放弃识别率。代价只是超大图慢一点：
+        /// 常规 1080p / 2K 选区根本走不到这个分支（见 <see cref="LargeImageSideThreshold"/>）。
+        /// </summary>
+        private const int MaxSideLen = 2048;
 
         /// <summary>
-        /// 整图最长边超过该值（如 4K 整屏 / 超长网页截图）时，额外等比缩小到 <see cref="MaxSideLen"/>，
+        /// 整图最长边超过该值（如 4K 整屏 / 超长网页截图）时，等比缩小到 <see cref="MaxSideLen"/>，
         /// 防止识别阶段在超大位图上内存飙升或卡死。常规 1080p / 2K 选区不受影响。
         /// </summary>
         private const int LargeImageSideThreshold = 3000;
 
+        /// <summary>
+        /// PP-OCRv6 预设（<c>RapidOcrOptions.PPOCRv6</c>，等价于 PythonCompat）的短边自适应目标。
+        /// 引擎内部会把短边拉到 736 —— 估算「引擎实际看到的字有多大」时必须把它算进去，
+        /// 否则会低估小字程度，白白放过该增强的图。
+        /// </summary>
+        private const int EngineShortSideTarget = 736;
+
+        /// <summary>首轮结果的中位行高（换算到引擎实际尺度）低于该值时触发小字增强</summary>
+        private const double BoostTriggerMedianHeight = 32.0;
+
+        /// <summary>小字增强的目标行高，略低于识别头 48px 训练尺度，避免过度放大带来的插值模糊</summary>
+        private const double BoostTargetMedianHeight = 44.0;
+
+        private const double MinBoost = 1.4;
+        private const double MaxBoost = 2.5;
+
+        /// <summary>增强后长边硬上限：再大就会被引擎的缩放逻辑缩回去，白跑一遍</summary>
+        private const int MaxBoostedSide = 2600;
+
+        /// <summary>样本太少时中位行高不可信，不做增强判断</summary>
+        private const int BoostMinBlockCount = 3;
+
         /// <summary>背景极性检测用的缩略图长边（缩小过程即区域平均，成本与原图幅无关）</summary>
-        private const int PolarityThumbSize = 32;
+        private const int PolarityThumbSize = 48;
+
+        /// <summary>极性判定网格：3×3 共 9 格，逐格投票</summary>
+        private const int PolarityGridSize = 3;
 
         /// <summary>
         /// 背景平均亮度低于该值即判定为深色。
@@ -158,18 +201,30 @@ namespace WinKit.Translate.Services
             if (image == null || image.Width < 4 || image.Height < 4)
                 return ModelOcrResult.Fail("选区过小，无法识别");
 
+            // 声明「即将使用引擎」：取消任何待触发的闲置瘦身。
+            // 旧版只有关闭瘦身开关时才会走到 CancelSlim，此处注释里写的
+            // 「即将开始一次识别时调用」实际上从未被调用 —— 于是长识别一旦
+            // 撞上闲置计时器，识别刚结束引擎就被卸载，下次要重新加载模型。
+            CancelSlim();
+
             try
             {
                 await _gate.WaitAsync(ct).ConfigureAwait(false);
             }
             catch (OperationCanceledException)
             {
+                // 没真正跑起来也要恢复闲置计时，否则计时器会一直停在已取消状态，
+                // 引擎从此再也不会被瘦身。
+                ScheduleSlim();
                 return ModelOcrResult.Fail("识别已取消");
             }
 
             try
             {
-                return await Task.Run(() => RecognizeCore(image), CancellationToken.None).ConfigureAwait(false);
+                // 原生推理是同步阻塞的，统一扔线程池；ct 会一路传到 ONNX RunOptions，
+                // 中途取消时 DetectAsync 抛 OperationCanceledException，而不是白跑到底。
+                return await Task.Run(() => RecognizeCoreAsync(image, ct), CancellationToken.None)
+                                 .ConfigureAwait(false);
             }
             finally
             {
@@ -198,7 +253,7 @@ namespace WinKit.Translate.Services
                 _options = options;
 
                 // 只有影响引擎构造的参数变了才真正重建（一次要数秒）；
-                // 瘦身策略、深色自动反色这类前后处理参数就地生效，不付出重建代价。
+                // 瘦身策略、深色反色、置信度阈值、小字增强这些前后处理参数就地生效。
                 if (needRebuild)
                 {
                     _failedModels.Clear();
@@ -333,52 +388,136 @@ namespace WinKit.Translate.Services
         //  内部实现（均在信号量保护下的线程池线程执行）
         // ══════════════════════════════════════════════
 
-        private ModelOcrResult RecognizeCore(Bitmap image)
+        private async Task<ModelOcrResult> RecognizeCoreAsync(Bitmap image, CancellationToken ct)
         {
             var engine = EnsureEngine();
             if (engine == null)
                 return ModelOcrResult.Fail(_initError ?? "OCR 引擎不可用");
 
-            Bitmap? prepared = null;
-            SKBitmap? skImage = null;
             try
             {
                 var sw = Stopwatch.StartNew();
-                prepared = Prepare(image, out bool inverted, out double preprocessScale);
-                skImage = ToSkBitmap(prepared);
 
                 // v6 必须配 PPOCRv6 预设：Default 预设的 1024 长边上限 + 50px 白边
                 // 是为 v5 调的，会让 v6 检测器分辨率不足，小图上漏框或出乱码。
+                //
+                // TextScore 置 0 让引擎全量回传，过滤改由本层做：
+                // 这样才能统计「滤掉了多少块」并给每块标注置信度。
+                // 引擎内部静默丢弃的话，用户根本不知道漏了什么。
                 var detectOptions = RapidOcrOptions.PPOCRv6 with
                 {
                     DoAngle = _options.EnableAngleClassification,
+                    TextScore = 0f,
                 };
 
-                var raw = engine.Detect(skImage, detectOptions);
-                sw.Stop();
-
-                if (raw?.TextBlocks == null || raw.TextBlocks.Length == 0)
+                // ── 第一轮 ──
+                var first = await RunPassAsync(engine, image, detectOptions, 1.0, ct).ConfigureAwait(false);
+                if (first == null)
                     return ModelOcrResult.Fail("未识别到文字");
 
-                // 引擎回传的是缩放后位图空间里的四点框，统一折算为矩形包围盒，
-                // 再由版面层按 preprocessScale 换算回原图坐标系。
-                var blocks = ToBlocks(raw.TextBlocks);
-                if (blocks.Count == 0)
-                    return ModelOcrResult.Fail("未识别到文字");
+                var blocks = first.Value.Blocks;
+                double scale = first.Value.Scale;
+                bool inverted = first.Value.Inverted;
+                int filtered = first.Value.FilteredBlocks;
+                bool boosted = false;
 
-                var layout = OcrTextLayout.Compose(
-                    blocks, image.Width, image.Height, preprocessScale);
+                // ── 第二轮：小字增强 ──
+                if (_options.SmallTextBoost)
+                {
+                    double boost = ComputeBoostFactor(blocks, image, scale);
+                    if (boost > 1.0)
+                    {
+                        ct.ThrowIfCancellationRequested();
 
+                        var second = await RunPassAsync(engine, image, detectOptions, boost, ct).ConfigureAwait(false);
+                        if (second != null && IsBetterResult(second.Value.Blocks, blocks))
+                        {
+                            blocks = second.Value.Blocks;
+                            scale = second.Value.Scale;
+                            inverted = second.Value.Inverted;
+                            // 只报告「最终采用那一轮」的过滤数，两轮累加会误导
+                            filtered = second.Value.FilteredBlocks;
+                            boosted = true;
+                        }
+                    }
+                }
+
+                ct.ThrowIfCancellationRequested();
+
+                var layout = OcrTextLayout.Compose(blocks, image.Width, image.Height, scale);
                 if (string.IsNullOrWhiteSpace(layout.Text))
                     return ModelOcrResult.Fail("未识别到文字");
 
-                return ModelOcrResult.Ok(layout.Text, layout.Lines, sw.ElapsedMilliseconds,
-                                         layout.Blocks.Count, inverted, layout.Blocks);
+                double avgConf = layout.Blocks.Count > 0
+                    ? layout.Blocks.Average(b => (double)b.Confidence)
+                    : 0;
+
+                sw.Stop();
+
+                Debug.WriteLine(
+                    $"RapidOcrProvider: {layout.Blocks.Count} 块 / 置信 {avgConf:F3} / {sw.ElapsedMilliseconds} ms" +
+                    (boosted ? "（已小字增强）" : "") + (inverted ? "（已反色）" : ""));
+
+                return ModelOcrResult.Ok(
+                    layout.Text,
+                    layout.Lines,
+                    sw.ElapsedMilliseconds,
+                    layout.Blocks.Count,
+                    inverted,
+                    layout.Blocks,
+                    avgConf,
+                    boosted,
+                    filtered);
+            }
+            catch (OperationCanceledException)
+            {
+                Debug.WriteLine("RapidOcrProvider: 识别被取消");
+                return ModelOcrResult.Fail("识别已取消");
             }
             catch (Exception ex)
             {
                 Debug.WriteLine($"RapidOcrProvider: 识别失败 - {ex}");
                 return ModelOcrResult.Fail($"识别失败: {ex.Message}");
+            }
+        }
+
+        /// <summary>一轮「预处理 → 推理 → 转块」的结果</summary>
+        private readonly record struct PassResult(
+            List<OcrTextBlock> Blocks,
+            double Scale,
+            bool Inverted,
+            int FilteredBlocks);
+
+        /// <summary>
+        /// 跑一轮完整识别。<paramref name="boost"/> 为额外放大倍率（1.0 表示不做小字增强）。
+        /// 返回 null 表示这一轮没识别到任何可用文字。
+        /// </summary>
+        private async Task<PassResult?> RunPassAsync(
+            RapidOcr engine,
+            Bitmap image,
+            RapidOcrOptions options,
+            double boost,
+            CancellationToken ct)
+        {
+            Bitmap? prepared = null;
+            SKBitmap? skImage = null;
+            try
+            {
+                prepared = Prepare(image, boost, out bool inverted, out double scale);
+                skImage = ToSkBitmap(prepared);
+
+                // DetectAsync 的取消是逐 kernel 生效的（RunOptions.terminate），
+                // 连 detection 这个最长的一段也能被打断 —— 同步 Detect 做不到。
+                var raw = await engine.DetectAsync(skImage, options, null, ct).ConfigureAwait(false);
+
+                if (raw?.TextBlocks == null || raw.TextBlocks.Length == 0)
+                    return null;
+
+                var (blocks, filtered) = ToBlocks(raw.TextBlocks, _options.EffectiveTextScore);
+                if (blocks.Count == 0)
+                    return null;
+
+                return new PassResult(blocks, scale, inverted, filtered);
             }
             finally
             {
@@ -386,6 +525,85 @@ namespace WinKit.Translate.Services
                 if (!ReferenceEquals(prepared, image))
                     prepared?.Dispose();
             }
+        }
+
+        /// <summary>
+        /// 估算需要多大的额外放大倍率来救小字。返回 1.0 表示不需要增强。
+        ///
+        /// 判据不是「整图高度」而是「检出框的中位高度」——这正是旧实现的盲点：
+        /// 一个 900px 高的代码块整图够大，但里面正文只有 12px，
+        /// 按整图判断永远不会触发放大，小字就这样原样喂给了按 48px 训练的识别头。
+        /// </summary>
+        private double ComputeBoostFactor(List<OcrTextBlock> blocks, Bitmap source, double scale)
+        {
+            if (blocks.Count < BoostMinBlockCount) return 1.0;
+
+            double medianH = MedianHeight(blocks);
+            if (medianH <= 0) return 1.0;
+
+            // 换算到「引擎实际看到的尺度」：PPOCRv6 预设会把短边拉到 736。
+            // 漏算这一步会低估小字程度，该增强的图被放过。
+            int prepW = Math.Max(1, (int)Math.Round(source.Width * scale));
+            int prepH = Math.Max(1, (int)Math.Round(source.Height * scale));
+            int shortSide = Math.Min(prepW, prepH);
+            double engineScale = shortSide > 0 && shortSide < EngineShortSideTarget
+                ? (double)EngineShortSideTarget / shortSide
+                : 1.0;
+
+            double effectiveH = medianH * engineScale;
+            if (effectiveH >= BoostTriggerMedianHeight) return 1.0;
+
+            double factor = Math.Clamp(
+                BoostTargetMedianHeight / effectiveH,
+                MinBoost,
+                MaxBoost);
+
+            // 放大后若超硬上限，只放大到上限为止（再多也会被引擎缩回去）
+            double maxSide = Math.Max(source.Width, source.Height);
+            if (maxSide <= 0) return 1.0;
+
+            double cap = (double)MaxBoostedSide / (maxSide * scale);
+            if (factor > cap) factor = cap;
+
+            return factor > MinBoost ? factor : 1.0;
+        }
+
+        /// <summary>检出框高度的中位数</summary>
+        private static double MedianHeight(List<OcrTextBlock> blocks)
+        {
+            var heights = blocks
+                .Select(b => (double)b.Height)
+                .Where(h => h > 0)
+                .OrderBy(h => h)
+                .ToList();
+
+            if (heights.Count == 0) return 0;
+
+            int mid = heights.Count / 2;
+            return heights.Count % 2 == 1
+                ? heights[mid]
+                : (heights[mid - 1] + heights[mid]) / 2.0;
+        }
+
+        /// <summary>
+        /// 判断增强后的结果是否比首轮更好。
+        ///
+        /// 两个条件同时满足才采用：
+        ///   1. 认出的字符总数没有变少 —— 放大后检测退化（框变少/变碎）时直接否掉；
+        ///   2. 平均置信度没有明显下降（容忍 0.05 抖动）。
+        /// 只看块数不够：放大后框可能变多但都是碎片，置信度会掉。
+        /// </summary>
+        private static bool IsBetterResult(List<OcrTextBlock> candidate, List<OcrTextBlock> baseline)
+        {
+            if (candidate.Count == 0) return false;
+
+            int candChars = candidate.Sum(b => b.Text.Length);
+            int baseChars = baseline.Sum(b => b.Text.Length);
+            if (candChars < baseChars) return false;
+
+            double candConf = candidate.Average(b => (double)b.Confidence);
+            double baseConf = baseline.Average(b => (double)b.Confidence);
+            return candConf + 0.05 >= baseConf;
         }
 
         /// <summary>
@@ -495,19 +713,25 @@ namespace WinKit.Translate.Services
         }
 
         /// <summary>
-        /// 预处理：统一为 32 位色，对过小的选区做放大，必要时对深色背景反色。
-        /// 屏幕正文常见 12~16px 行高，远低于识别模型 48px 的训练尺度，
-        /// 直接送入会明显掉字，先放大再识别性价比很高。
+        /// 预处理：统一为 32 位色，对过小的选区做放大，必要时对深色背景反色，
+        /// 并叠加小字增强要求的额外放大倍率。
         /// </summary>
+        /// <param name="source">原始位图</param>
+        /// <param name="boost">
+        /// 额外放大倍率（1.0 = 不增强）。第二轮识别专用：
+        /// 首轮发现字太小，就按目标行高把整图放大再来一遍。
+        /// </param>
         /// <param name="inverted">输出：本次是否因检出深色背景而反色</param>
         /// <param name="scale">
         /// 输出：原图 → 送入引擎的位图的缩放系数。
         /// 引擎回传的文本框坐标位于缩放后的空间，需按此系数换算回原图
         /// （见 <c>OcrTextLayout.Compose</c> 的坐标反映射）。
         /// </param>
-        private Bitmap Prepare(Bitmap source, out bool inverted, out double scale)
+        private Bitmap Prepare(Bitmap source, double boost, out bool inverted, out double scale)
         {
             scale = 1.0;
+
+            // ① 极小选区放大：整图还没一行字高时，直接放大到识别头舒服的尺度
             if (source.Height < SmallRegionHeightThreshold)
             {
                 scale = Math.Min(MaxUpscale, (double)PreferredSmallRegionHeight / source.Height);
@@ -517,18 +741,29 @@ namespace WinKit.Translate.Services
                     scale = MaxUpscaledSide / (double)Math.Max(source.Width, source.Height);
             }
 
-            // 超大截图兜底：整图最长边超过阈值（如 4K 整屏 / 超长网页截图）时，
-            // 等比缩小到 MaxSideLen，避免识别阶段在超大位图上内存飙升或卡死。
-            // 常规 1080p / 2K 选区不受影响，保持原生分辨率以保证小字识别率。
+            // ② 超大截图兜底：整图最长边超过阈值（4K 整屏 / 超长网页截图）时缩到 MaxSideLen，
+            //    避免识别阶段在超大位图上内存飙升或卡死。
+            //    注意这条只对 >3000px 生效，常规 1080p / 2K 选区保持原生分辨率。
             var longestSide = Math.Max(source.Width, source.Height) * scale;
             if (longestSide > LargeImageSideThreshold)
                 scale *= (double)MaxSideLen / longestSide;
+
+            // ③ 小字增强：第一轮结果不理想时按倍率再放大一次，但绝不突破硬上限
+            if (boost > 1.0)
+            {
+                double boosted = scale * boost;
+                double maxSide = Math.Max(source.Width, source.Height);
+                if (maxSide > 0 && maxSide * boosted > MaxBoostedSide)
+                    boosted = (double)MaxBoostedSide / maxSide;
+
+                if (boosted > scale) scale = boosted;
+            }
 
             int width = Math.Max(1, (int)Math.Round(source.Width * scale));
             int height = Math.Max(1, (int)Math.Round(source.Height * scale));
 
             // PP-OCR 识别头按「白底黑字」训练，深色主题截图（浅字深底）直接送入会明显掉字，
-            // 先反色可把它拉回训练分布。检测放在缩略图上做，与被缩放与否互不干扰。
+            // 先反色可把它拉回训练分布。
             inverted = _options.AutoInvertDark && IsDarkBackground(source);
 
             // 统一成 32bpp：SKBitmap 侧按 Bgra8888 / Opaque 直接按行拷贝像素，
@@ -564,19 +799,23 @@ namespace WinKit.Translate.Services
         }
 
         /// <summary>
-        /// 判断截图是否为深色背景。
+        /// 判断截图是否为深色背景（3×3 网格投票）。
         ///
-        /// 整图等比缩到长边 32 的缩略图，再只取缩略图外圈求平均亮度：
-        /// 截图中央通常是内容（文字 / 图片），四周边带才真正代表背景底色。
-        /// 采样量恒定在千像素以内，耗时与原始图幅无关。
+        /// 旧实现只看整图外圈的平均亮度，遇到「深色窗口里嵌浅色对话框 / 浅色网页里嵌深色终端」
+        /// 这类深浅混排的截图会整图判错极性 —— 一次整图反色把正常的那一半直接毁掉。
+        /// 改为把图缩到 48px 长边后切成 3×3 共 9 格，逐格算平均亮度，
+        /// 只有 ≥2/3 的格子都偏暗才整图反色；混排时保守按浅色（不反色）处理 ——
+        /// 宁可让深色那一半掉字，也不能让浅色那一半变乱码。
+        ///
+        /// 采样量恒定（48×48 以内），耗时与原图幅无关。
         /// </summary>
         private static bool IsDarkBackground(Bitmap source)
         {
             try
             {
                 double s = (double)PolarityThumbSize / Math.Max(source.Width, source.Height);
-                int tw = Math.Max(1, (int)Math.Round(source.Width * s));
-                int th = Math.Max(1, (int)Math.Round(source.Height * s));
+                int tw = Math.Max(PolarityGridSize, (int)Math.Round(source.Width * s));
+                int th = Math.Max(PolarityGridSize, (int)Math.Round(source.Height * s));
 
                 using var thumb = new Bitmap(tw, th, PixelFormat.Format24bppRgb);
                 using (var g = Graphics.FromImage(thumb))
@@ -587,27 +826,59 @@ namespace WinKit.Translate.Services
                     g.DrawImage(source, new Rectangle(0, 0, tw, th));
                 }
 
-                int border = Math.Max(1, Math.Min(tw, th) / 8);
-                double sum = 0;
-                int count = 0;
-
-                for (int y = 0; y < th; y++)
+                // 用 LockBits 一次拷出，避免 GetPixel 逐点跨越托管/非托管边界
+                var rect = new Rectangle(0, 0, tw, th);
+                var data = thumb.LockBits(rect, ImageLockMode.ReadOnly, PixelFormat.Format24bppRgb);
+                byte[] buffer;
+                int stride;
+                try
                 {
-                    bool edgeRow = y < border || y >= th - border;
+                    stride = data.Stride;
+                    buffer = new byte[stride * th];
+                    Marshal.Copy(data.Scan0, buffer, 0, buffer.Length);
+                }
+                finally
+                {
+                    thumb.UnlockBits(data);
+                }
 
-                    for (int x = 0; x < tw; x++)
+                int darkCells = 0;
+                for (int gy = 0; gy < PolarityGridSize; gy++)
+                {
+                    int y0 = gy * th / PolarityGridSize;
+                    int y1 = (gy + 1) * th / PolarityGridSize;
+
+                    for (int gx = 0; gx < PolarityGridSize; gx++)
                     {
-                        if (!edgeRow && x >= border && x < tw - border)
-                            continue;   // 中央内容区不参与背景判定
+                        int x0 = gx * tw / PolarityGridSize;
+                        int x1 = (gx + 1) * tw / PolarityGridSize;
 
-                        var c = thumb.GetPixel(x, y);
-                        sum += 0.299 * c.R + 0.587 * c.G + 0.114 * c.B;
-                        count++;
+                        double sum = 0;
+                        int count = 0;
+
+                        for (int y = y0; y < y1; y++)
+                        {
+                            int row = y * stride;
+                            for (int x = x0; x < x1; x++)
+                            {
+                                int i = row + x * 3;
+                                if (i + 2 >= buffer.Length) continue;
+
+                                double b = buffer[i];
+                                double g2 = buffer[i + 1];
+                                double r = buffer[i + 2];
+                                sum += 0.299 * r + 0.587 * g2 + 0.114 * b;
+                                count++;
+                            }
+                        }
+
+                        if (count > 0 && sum / count < DarkBackgroundLumaThreshold)
+                            darkCells++;
                     }
                 }
 
-                if (count == 0) return false;
-                return sum / count < DarkBackgroundLumaThreshold;
+                int totalCells = PolarityGridSize * PolarityGridSize;
+                return darkCells * 3 >= totalCells * 2;   // ≥ 2/3 的格子偏暗
             }
             catch (Exception ex)
             {
@@ -651,14 +922,22 @@ namespace WinKit.Translate.Services
         }
 
         /// <summary>
-        /// RapidOcrNet 的文本框 → 项目通用文本框。
+        /// RapidOcrNet 的文本框 → 项目通用文本框（带置信度）。
+        ///
         /// 引擎给的是四点多边形（顺时针，源位图像素坐标），这里折算成外接矩形：
         /// 项目下游只需矩形即可在截图上作画（对照高亮 / 译文叠图 / 按块复制）。
+        ///
+        /// <paramref name="minScore"/> 之下的块直接丢弃 —— 那基本都是图标、边框、
+        /// 页面纹理被误检成"文字"，留着只会污染识别结果、拉低整段译文质量。
+        /// 被丢弃的数量回传给调用方，用于状态栏 / 诊断展示。
         /// </summary>
-        private static List<OcrTextBlock> ToBlocks(IReadOnlyList<TextBlock> source)
+        private static (List<OcrTextBlock> Blocks, int Filtered) ToBlocks(
+            IReadOnlyList<TextBlock> source,
+            double minScore)
         {
             var list = new List<OcrTextBlock>();
-            if (source == null) return list;
+            int filtered = 0;
+            if (source == null) return (list, filtered);
 
             foreach (var b in source)
             {
@@ -666,6 +945,21 @@ namespace WinKit.Translate.Services
 
                 var points = b.BoxPoints;
                 if (points == null || points.Length == 0) continue;
+
+                // 逐字符置信度均值。引擎未回传时按 1.0 处理（不因缺数据误杀）。
+                double confidence = 1.0;
+                var scores = b.CharScores;
+                if (scores is { Length: > 0 })
+                {
+                    try { confidence = scores.Average(x => (double)x); }
+                    catch { confidence = 1.0; }
+                }
+
+                if (confidence < minScore)
+                {
+                    filtered++;
+                    continue;
+                }
 
                 float minX = float.MaxValue, minY = float.MaxValue;
                 float maxX = float.MinValue, maxY = float.MinValue;
@@ -686,10 +980,11 @@ namespace WinKit.Translate.Services
                     Top = (int)Math.Floor(minY),
                     Right = (int)Math.Ceiling(maxX),
                     Bottom = (int)Math.Ceiling(maxY),
+                    Confidence = (float)confidence,
                 });
             }
 
-            return list;
+            return (list, filtered);
         }
 
         private void DisposeEngine()

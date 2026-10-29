@@ -65,19 +65,62 @@ namespace WinKit.Common
                         }
                         else
                         {
+                            // JsonElement.WriteTo 只写「值」、不写「键」。
+                            // 漏掉 WritePropertyName 会让 writer 停在「等待属性名」的状态下收到
+                            // 一个 StartObject，抛 InvalidOperationException("Cannot write a JSON
+                            // value within an object without a property name") —— 表现即「所有设置
+                            // 都存不进去」。上面敏感字段那个带 name 的重载没有这个坑。
+                            writer.WritePropertyName(prop.Name);
                             prop.Value.WriteTo(writer);
                         }
                     }
                     writer.WriteEndObject();
                 }
 
-                File.WriteAllText(_settingsFile, Encoding.UTF8.GetString(stream.ToArray()), Encoding.UTF8);
+                // 先写临时文件再替换：中途失败只会留下 .tmp，不会把用户整份配置写成半截 JSON
+                var temp = _settingsFile + ".tmp";
+                File.WriteAllText(temp, Encoding.UTF8.GetString(stream.ToArray()), Encoding.UTF8);
+                File.Move(temp, _settingsFile, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                // 写盘失败不再静默：Debug.WriteLine 在 Release 构建下被编译器整体剔除，
+                // 此前出问题时磁盘上没有任何痕迹可查。
+                LogSaveError(ex);
+            }
 
+            // 变更通知放在 try 之外 —— 配置生效不该取决于磁盘是否写成功。
+            // 旧实现把 Invoke 放在 try 内：一旦序列化或写盘抛异常，
+            // 「内存里已经改了」与「界面上毫无反应」就同时成立，表现即设置失灵。
+            try
+            {
                 SettingsChanged?.Invoke(this, _settings);
             }
             catch (Exception ex)
             {
-                System.Diagnostics.Debug.WriteLine($"SettingsManager: 保存设置失败 - {ex.Message}");
+                System.Diagnostics.Debug.WriteLine($"SettingsManager: 设置变更通知失败 - {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 把保存失败落到日志文件（<c>%APPDATA%/WinKit/settings-error.log</c>）。
+        /// 只在异常时写，超过 64KB 自动重开一份，避免长期运行无限堆积。
+        /// </summary>
+        private static void LogSaveError(Exception ex)
+        {
+            try
+            {
+                var path = Path.Combine(AppPaths.AppData, "settings-error.log");
+                var info = new FileInfo(path);
+                if (info.Exists && info.Length > 64 * 1024) File.Delete(path);
+
+                File.AppendAllText(path,
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] {ex.GetType().Name}: {ex.Message}{Environment.NewLine}{ex.StackTrace}{Environment.NewLine}{Environment.NewLine}",
+                    Encoding.UTF8);
+            }
+            catch
+            {
+                // 记日志本身失败只能放弃，绝不能反过来影响主流程
             }
         }
 

@@ -1,10 +1,10 @@
 {
-  "tag": "v2.3.3",
-  "version": "2.3.3",
+  "tag": "v2.4.0",
+  "version": "2.4.0",
   "publishedAt": "2026-10-29",
-  "zip": "WinKit-v2.3.3-win-x64.zip",
-  "downloadUrl": "https://gitee.com/worhllo/WinKit/releases/download/v2.3.3/WinKit-v2.3.3-win-x64.zip",
-  "mirror": "https://github.com/oishijie/WinKit/releases/download/v2.3.3/WinKit-v2.3.3-win-x64.zip",
-  "cnb": "https://cnb.cool/wordoi.rlc/winkit-customer/-/releases/download/v2.3.3/WinKit-v2.3.3-win-x64.zip",
+  "zip": "WinKit-v2.4.0-win-x64.zip",
+  "downloadUrl": "https://gitee.com/worhllo/WinKit/releases/download/v2.4.0/WinKit-v2.4.0-win-x64.zip",
+  "mirror": "https://github.com/oishijie/WinKit/releases/download/v2.4.0/WinKit-v2.4.0-win-x64.zip",
+  "cnb": "https://cnb.cool/wordoi.rlc/winkit-customer/-/releases/download/v2.4.0/WinKit-v2.4.0-win-x64.zip",
   "note": "WinKit 发布镜像清单（供人或脚本取用，程序自动更新不读取本文件：版本探测走 Gitee API + GitHub 302，下载时对 Gitee/GitHub/CNB 三镜像并发测速选最快）。CNB 的 release API 与 git/raw 文件接口匿名一律 401，故不能作为公开探测源。发新版本时同步更新本文件并推送仓库。"
 }

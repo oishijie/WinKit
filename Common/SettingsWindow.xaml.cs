@@ -204,7 +204,7 @@ namespace WinKit.Common
                 SelectModel(OcrModelCatalog.Parse(s.OcrModel));
                 AngleClsToggle.IsChecked = s.OcrEnableAngleClassification;
                 InvertDarkToggle.IsChecked = s.OcrAutoInvertDark;
-                MkldnnToggle.IsChecked = s.OcrEnableMkldnn;
+                SmallTextBoostToggle.IsChecked = s.OcrSmallTextBoost;
                 ThreadsBox.Text = Clamp(s.OcrCpuThreads, 0, 32).ToString();
                 ThreadsHintText.Text = $"0 = 按机器自动选择（本机 {Environment.ProcessorCount} 逻辑核，上限 8 线程）";
                 SlimSecondsBox.Text = Clamp(s.OcrIdleSlimSeconds, 0, 300).ToString();
@@ -1183,10 +1183,11 @@ namespace WinKit.Common
             Save();
         }
 
-        private void MkldnnToggle_Click(object sender, RoutedEventArgs e)
+        private void SmallTextBoostToggle_Click(object sender, RoutedEventArgs e)
         {
             if (_suspend) return;
-            _settingsManager.Settings.OcrEnableMkldnn = MkldnnToggle.IsChecked == true;
+            // 属识别前处理参数，不触发引擎重建（OcrEngineOptions.SameEngineConfig 已排除）
+            _settingsManager.Settings.OcrSmallTextBoost = SmallTextBoostToggle.IsChecked == true;
             Save();
         }
 

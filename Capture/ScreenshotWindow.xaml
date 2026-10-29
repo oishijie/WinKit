@@ -35,18 +35,19 @@
             <TextBlock x:Name="SizeText" Foreground="White" FontSize="11"/>
         </Border>
 
-        <!-- 顶部操作提示 -->
+        <!-- 顶部操作提示。只对齐圆角与文字层级，遮罩和选框的视觉保持原样 ——
+             截图层是功能性的，改结构反而影响辨认。 -->
         <Border x:Name="HintBar"
                 Background="#CC000000"
-                CornerRadius="6"
-                Padding="14,7"
+                CornerRadius="{StaticResource Radius8}"
+                Padding="14,6"
                 Canvas.Left="0"
                 Canvas.Top="0"
                 IsHitTestVisible="False">
-            <TextBlock Foreground="White" FontSize="12.5">
-                <Run Text="拖拽选择识别区域"/>
-                <Run Text="  ·  "/>
-                <Run Text="ESC 取消"/>
+            <TextBlock FontSize="12">
+                <Run Text="拖拽选择识别区域" Foreground="White"/>
+                <Run Text="   " />
+                <Run Text="ESC 取消" Foreground="#99FFFFFF"/>
             </TextBlock>
         </Border>
     </Canvas>

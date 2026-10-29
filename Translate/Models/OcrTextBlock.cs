@@ -38,6 +38,21 @@ namespace WinKit.Translate.Models
         /// </summary>
         public int LineIndex { get; set; } = -1;
 
+        /// <summary>
+        /// 该框的识别置信度（0~1，取引擎回传的逐字符置信度均值）。
+        ///
+        /// 用途有三：
+        ///   1. 入库前过滤 —— 低于阈值的块视为噪声/图标误检，直接丢弃（见 Provider 的 TextScore 过滤）；
+        ///   2. 界面提示 —— 低置信块可在结果窗标黄，提示用户核对；
+        ///   3. 引擎择优 —— 小字增强会跑两遍，用平均置信度决定采用哪一遍的结果。
+        ///
+        /// 缺省为 1.0，供不提供逐字置信度的引擎（或人工构造的块）使用。
+        /// </summary>
+        public float Confidence { get; set; } = 1.0f;
+
+        /// <summary>是否为低置信块（低于 0.6），供界面做弱提示</summary>
+        public bool IsLowConfidence => Confidence < 0.6f;
+
         /// <summary>包围盒宽度（像素）</summary>
         public int Width => Math.Max(0, Right - Left);
 

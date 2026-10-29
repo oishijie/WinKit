@@ -16,9 +16,10 @@
     <!-- 主容器：圆角边框 + 60% 不透明白色背景 (#99FFFFFF) -->
     <Border x:Name="RootBorder"
             Background="#CCFFFFFF"
-            CornerRadius="10"
+            CornerRadius="{StaticResource Radius12}"
             BorderBrush="#22000000"
-            BorderThickness="1">
+            BorderThickness="1"
+            Effect="{StaticResource WinShadow}">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="36"/>

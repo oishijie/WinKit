@@ -12,54 +12,46 @@
         WindowStartupLocation="Manual"
         KeyDown="Window_KeyDown">
 
+    <!--
+        图片编辑器：保持深色（看图与标注需要中性暗底才判断得准颜色），
+        但按钮规范、圆角、分组与浅色浮窗共用同一套 App.xaml 资源。
+
+        工具条改为三段：
+          左  绘图工具（互斥选中）
+          中  历史（撤销 / 重做）
+          右  导出（复制为主操作）+ 关闭
+
+        原先所有动作从左排到右，「关闭」紧挨「另存为」容易误点，
+        状态文字挤在工具条最右被按钮顶到边缘；现在状态独立成底部一条。
+    -->
+
     <Window.Resources>
 
-        <!-- 工具按钮（互斥选中） -->
+        <!-- 绘图工具（互斥选中）。选中态由纯亮蓝实心块改为淡蓝底 + 蓝字，
+             不再抢走图像本身的注意力。 -->
         <Style x:Key="ToolBtn" TargetType="RadioButton">
-            <Setter Property="Foreground" Value="#DDDDDD"/>
-            <Setter Property="FontSize" Value="12.5"/>
+            <Setter Property="Foreground" Value="#CCCCCC"/>
+            <Setter Property="FontSize" Value="12"/>
             <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
             <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
             <Setter Property="Template">
                 <Setter.Value>
                     <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="bd" Background="Transparent" CornerRadius="5"
-                                Padding="10,5" Margin="1,0">
+                        <Border x:Name="bd" Background="Transparent"
+                                CornerRadius="{StaticResource Radius6}"
+                                Padding="12,4" Margin="1,0">
                             <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#33FFFFFF"/>
+                                <Setter TargetName="bd" Property="Background" Value="#24FFFFFF"/>
                             </Trigger>
                             <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#FF0A6CFF"/>
-                                <Setter Property="Foreground" Value="#FFFFFF"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- 动作按钮 -->
-        <Style x:Key="ActionBtn" TargetType="Button">
-            <Setter Property="Foreground" Value="#DDDDDD"/>
-            <Setter Property="FontSize" Value="12.5"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="bd" Background="Transparent" CornerRadius="5"
-                                Padding="10,5" Margin="1,0">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#33FFFFFF"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Foreground" Value="#66FFFFFF"/>
+                                <Setter TargetName="bd" Property="Background" Value="#261A8CFF"/>
+                                <Setter TargetName="bd" Property="BorderBrush" Value="#4D1A8CFF"/>
+                                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
+                                <Setter Property="Foreground" Value="#7FB8FF"/>
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>
@@ -70,67 +62,84 @@
         <!-- 工具栏竖分隔线 -->
         <Style x:Key="ToolSep" TargetType="Border">
             <Setter Property="Width" Value="1"/>
-            <Setter Property="Height" Value="18"/>
+            <Setter Property="Height" Value="16"/>
             <Setter Property="Background" Value="#33FFFFFF"/>
-            <Setter Property="Margin" Value="7,0"/>
+            <Setter Property="Margin" Value="8,0"/>
         </Style>
 
     </Window.Resources>
 
+    <!-- Margin 为投影留扩散空间（同结果窗）。窗口是 SizeToContent，自动外扩 20px，
+         图像区尺寸不受影响。 -->
     <Border x:Name="RootBorder"
+            Margin="10"
             Background="#FF202020"
             BorderBrush="#4DFFFFFF"
             BorderThickness="1"
-            CornerRadius="8">
-        <DockPanel>
+            CornerRadius="{StaticResource Radius12}"
+            Effect="{StaticResource WinShadow}">
+        <Grid>
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
 
             <!-- ══ 工具栏（兼作拖动条） ══ -->
             <Border x:Name="ToolBar"
-                    DockPanel.Dock="Top"
+                    Grid.Row="0"
                     Background="#FF2B2B2B"
-                    CornerRadius="7,7,0,0"
-                    MouseLeftButtonDown="ToolBar_MouseLeftButtonDown">
-                <StackPanel Orientation="Horizontal" Margin="8,7">
+                    CornerRadius="11,11,0,0"
+                    MouseLeftButtonDown="ToolBar_MouseLeftButtonDown"
+                    Padding="8,7">
+                <Grid>
+                    <!-- 左：绘图工具 -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
+                        <RadioButton x:Name="ToolRect" Content="矩形" GroupName="Tool"
+                                     Style="{StaticResource ToolBtn}" IsChecked="True"
+                                     Checked="Tool_Checked" Tag="Rect"/>
+                        <RadioButton x:Name="ToolArrow" Content="箭头" GroupName="Tool"
+                                     Style="{StaticResource ToolBtn}"
+                                     Checked="Tool_Checked" Tag="Arrow"/>
+                        <RadioButton x:Name="ToolPen" Content="画笔" GroupName="Tool"
+                                     Style="{StaticResource ToolBtn}"
+                                     Checked="Tool_Checked" Tag="Pen"/>
+                        <RadioButton x:Name="ToolMosaic" Content="马赛克" GroupName="Tool"
+                                     Style="{StaticResource ToolBtn}"
+                                     Checked="Tool_Checked" Tag="Mosaic"/>
 
-                    <RadioButton x:Name="ToolRect"   Content="矩形"   GroupName="Tool"
-                                 Style="{StaticResource ToolBtn}" IsChecked="True"
-                                 Checked="Tool_Checked" Tag="Rect"/>
-                    <RadioButton x:Name="ToolArrow"  Content="箭头"   GroupName="Tool"
-                                 Style="{StaticResource ToolBtn}"
-                                 Checked="Tool_Checked" Tag="Arrow"/>
-                    <RadioButton x:Name="ToolPen"    Content="画笔"   GroupName="Tool"
-                                 Style="{StaticResource ToolBtn}"
-                                 Checked="Tool_Checked" Tag="Pen"/>
-                    <RadioButton x:Name="ToolMosaic" Content="马赛克" GroupName="Tool"
-                                 Style="{StaticResource ToolBtn}"
-                                 Checked="Tool_Checked" Tag="Mosaic"/>
+                        <Border Style="{StaticResource ToolSep}"/>
 
-                    <Border Style="{StaticResource ToolSep}"/>
+                        <Button x:Name="UndoBtn" Content="撤销"
+                                Style="{StaticResource WinBtnDark}"
+                                IsEnabled="False" Click="UndoBtn_Click"/>
+                        <Button x:Name="RedoBtn" Content="重做"
+                                Style="{StaticResource WinBtnDark}"
+                                Margin="4,0,0,0"
+                                IsEnabled="False" Click="RedoBtn_Click"/>
+                    </StackPanel>
 
-                    <Button x:Name="UndoBtn" Content="撤销" Style="{StaticResource ActionBtn}"
-                            IsEnabled="False" Click="UndoBtn_Click"/>
-                    <Button x:Name="RedoBtn" Content="重做" Style="{StaticResource ActionBtn}"
-                            IsEnabled="False" Click="RedoBtn_Click"/>
-
-                    <Border Style="{StaticResource ToolSep}"/>
-
-                    <Button Content="复制" Style="{StaticResource ActionBtn}" Click="CopyBtn_Click"/>
-                    <Button Content="另存为" Style="{StaticResource ActionBtn}" Click="SaveBtn_Click"/>
-                    <Button Content="关闭" Style="{StaticResource ActionBtn}" Click="CloseBtn_Click"/>
-
-                    <TextBlock x:Name="StatusText" Text="已复制到剪贴板"
-                               Foreground="#88FFFFFF" FontSize="11.5"
-                               VerticalAlignment="Center" Margin="10,0,4,0"/>
-                </StackPanel>
+                    <!-- 右：导出与关闭 -->
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                        <Button Content="复制" Style="{StaticResource WinBtnDarkPrimary}"
+                                Click="CopyBtn_Click"/>
+                        <Button Content="另存为" Style="{StaticResource WinBtnDark}"
+                                Margin="4,0,0,0" Click="SaveBtn_Click"/>
+                        <Button Content="✕" Style="{StaticResource WinBtnDark}"
+                                Margin="8,0,0,0" Padding="10,4"
+                                Click="CloseBtn_Click" ToolTip="关闭"/>
+                    </StackPanel>
+                </Grid>
             </Border>
 
             <!-- ══ 图像 + 标注层（大图溢出屏幕时可滚动查看，工具栏始终可见） ══ -->
             <ScrollViewer x:Name="ImageScroller"
+                          Grid.Row="1"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Auto"
-                          Background="#FF101010"
+                          Background="#FF141414"
                           Focusable="False">
-                <Grid x:Name="ImageHost" Background="#FF101010">
+                <Grid x:Name="ImageHost" Background="#FF141414">
                     <Image x:Name="BaseImage" Stretch="Fill"/>
                     <Canvas x:Name="OverlayCanvas"
                             Background="Transparent"
@@ -141,6 +150,17 @@
                 </Grid>
             </ScrollViewer>
 
-        </DockPanel>
+            <!-- ══ 底部状态条：不再与按钮争抢工具栏宽度 ══ -->
+            <Border Grid.Row="2"
+                    BorderBrush="#1FFFFFFF"
+                    BorderThickness="0,1,0,0"
+                    Padding="12,5">
+                <TextBlock x:Name="StatusText"
+                           Text="已复制到剪贴板"
+                           Foreground="#7A7A7A"
+                           FontSize="11.5"
+                           TextTrimming="CharacterEllipsis"/>
+            </Border>
+        </Grid>
     </Border>
 </Window>

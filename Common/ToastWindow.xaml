@@ -15,59 +15,16 @@
         MouseEnter="Window_MouseEnter"
         MouseLeave="Window_MouseLeave">
 
-    <Window.Resources>
-        <!-- 卡片上的扁平小按钮：透明底 + 细边，hover 微亮 -->
-        <Style x:Key="ToastButton" TargetType="Button">
-            <Setter Property="Background" Value="#00FFFFFF"/>
-            <Setter Property="BorderBrush" Value="#1F000000"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="Padding" Value="12,3"/>
-            <Setter Property="Foreground" Value="#333333"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Focusable" Value="False"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border x:Name="Bd"
-                                Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="6">
-                            <ContentPresenter HorizontalAlignment="Center"
-                                              VerticalAlignment="Center"
-                                              Margin="{TemplateBinding Padding}"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#10000000"/>
-                            </Trigger>
-                            <Trigger Property="IsPressed" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#1C000000"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-
-        <!-- 主操作按钮：边框更深、字更重，一眼看出该点哪个 -->
-        <Style x:Key="ToastButtonPrimary" TargetType="Button" BasedOn="{StaticResource ToastButton}">
-            <Setter Property="BorderBrush" Value="#3D000000"/>
-            <Setter Property="Foreground" Value="#1A1A1A"/>
-            <Setter Property="FontWeight" Value="Medium"/>
-        </Style>
-    </Window.Resources>
+    <!-- 按钮样式统一走 App.xaml 的 WinBtn / WinBtnPrimary（v2.4 起收归单一来源），
+         本窗口不再保留私有副本。按钮由代码动态创建，见 ToastWindow.xaml.cs。 -->
 
     <Border x:Name="RootBorder"
             Margin="12"
-            CornerRadius="12"
+            CornerRadius="{StaticResource Radius12}"
             Background="#F5F7F7F7"
             BorderBrush="#1A000000"
-            BorderThickness="1">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="16" ShadowDepth="2" Opacity="0.16" Color="Black"/>
-        </Border.Effect>
+            BorderThickness="1"
+            Effect="{StaticResource WinShadow}">
 
         <Grid Margin="14,12,12,12">
             <Grid.RowDefinitions>

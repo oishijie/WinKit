@@ -154,7 +154,7 @@ namespace WinKit.Common
             var btn = new Button
             {
                 Content = text,
-                Style = (Style)FindResource(primary ? "ToastButtonPrimary" : "ToastButton"),
+                Style = (Style)FindResource(primary ? "WinBtnPrimary" : "WinBtn"),
                 Margin = new Thickness(0, 0, 6, 0)
             };
             btn.Click += (_, _) =>

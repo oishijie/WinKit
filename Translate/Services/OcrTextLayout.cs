@@ -29,6 +29,10 @@ namespace WinKit.Translate.Services
         {
             public string Text = string.Empty;
             public int Left, Top, Right, Bottom;
+
+            /// <summary>置信度。版面重排会重建 OcrTextBlock，这里必须一路带着走，否则会悄悄丢成 1.0</summary>
+            public float Confidence = 1.0f;
+
             public int Height => Math.Max(1, Bottom - Top);
             public double CenterY => (Top + Bottom) / 2.0;
         }
@@ -83,6 +87,7 @@ namespace WinKit.Translate.Services
                         Right = MapCoordinate(f.Right, scale, sourceWidth),
                         Bottom = MapCoordinate(f.Bottom, scale, sourceHeight),
                         LineIndex = lineIndex,
+                        Confidence = f.Confidence,
                     });
                 }
             }
@@ -127,6 +132,7 @@ namespace WinKit.Translate.Services
                     Top = b.Top,
                     Right = b.Right,
                     Bottom = b.Bottom,
+                    Confidence = b.Confidence,
                 });
             }
 

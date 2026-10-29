@@ -34,6 +34,12 @@ namespace WinKit.Translate.Services
     ///
     /// 设计要点：PP-OCRv6 的 small / tiny 权重本身就是多语言的，
     /// 因此不再需要旧版那样按「中英文 / 英文」拆分模型档位。
+    ///
+    /// 命名注意：本项目字典文件名沿用 <c>PP-OCRv6_*_dict.txt</c>（大写 PP），
+    /// 而 RapidOcrNet 内置预设 <c>RapidOcrModelSet.PPOCRv6Small</c> 解析的是
+    /// <c>ppocrv6_*_dict.txt</c>（小写）。目前全部路径都由本类显式传入 InitModels，
+    /// 所以没有影响；**但若将来改用官方 ModelSet 预设，必须先把文件名改小写**，
+    /// 否则会得到一个「模型明明在目录里却报缺失」的诡异错误。
     /// </summary>
     public static class OcrModelCatalog
     {

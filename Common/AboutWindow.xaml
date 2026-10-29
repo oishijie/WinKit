@@ -11,12 +11,10 @@
         Deactivated="Window_Deactivated">
 
     <Border Background="#D9F5F5F5"
-            CornerRadius="10"
+            CornerRadius="{StaticResource Radius12}"
             BorderBrush="#1A000000"
-            BorderThickness="1">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="12" ShadowDepth="2" Opacity="0.15" Color="Black"/>
-        </Border.Effect>
+            BorderThickness="1"
+            Effect="{StaticResource WinShadow}">
         <Grid>
             <Grid.RowDefinitions>
                 <RowDefinition Height="30"/>

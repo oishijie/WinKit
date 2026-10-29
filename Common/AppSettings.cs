@@ -226,10 +226,13 @@ namespace WinKit.Common
         public string OcrModel { get; set; } = "V6_Small";
 
         /// <summary>
-        /// 是否启用文字方向分类。截图场景文字基本为正向，
-        /// 关闭可省一次推理；识别竖排或旋转文本时再打开。
+        /// 是否启用文字方向分类（0° / 180° 判定）。
+        ///
+        /// 默认**开启**。分类模型仅 1MB、开销只占全流程 3~5%，
+        /// 而关掉的代价是倒置文字（截图时画面翻转、拍屏照片）直接出乱码 ——
+        /// 典型的「省了一点时间，丢了一大片正确率」。
         /// </summary>
-        public bool OcrEnableAngleClassification { get; set; } = false;
+        public bool OcrEnableAngleClassification { get; set; } = true;
 
         /// <summary>
         /// 深色截图自动反色（默认开启）。
@@ -239,8 +242,24 @@ namespace WinKit.Common
         /// </summary>
         public bool OcrAutoInvertDark { get; set; } = true;
 
-        /// <summary>是否启用 MKL-DNN 加速（CPU 推理，默认开启）</summary>
-        public bool OcrEnableMkldnn { get; set; } = true;
+        /// <summary>
+        /// 识别结果置信度过滤阈值（0~1，默认 0.5，与 RapidOCR 官方 text_score 默认值一致）。
+        ///
+        /// 引擎对每行都会回传逐字符置信度均值，低于该值的行视为「图标 / 边框 / 噪点被误检」，
+        /// 直接丢弃。调低会保留更多可疑文本（可能夹乱码），调高会更干净但可能误删真实内容。
+        /// 属识别后处理，改动不触发引擎重建。
+        /// </summary>
+        public double OcrTextScoreThreshold { get; set; } = 0.5;
+
+        /// <summary>
+        /// 小字增强（默认开启）：首轮检出框偏小时，按目标行高整体放大后再识别一遍，
+        /// 两轮之间按「字符总数 + 平均置信度」择优采用。
+        ///
+        /// 解决的是屏幕截图的典型难题 —— PP-OCR 识别头按 48px 行高训练，
+        /// 而桌面正文常常只有 12~16px。代价是最多跑两遍推理（仅在检出小字时触发）。
+        /// 属识别前处理，改动不触发引擎重建。
+        /// </summary>
+        public bool OcrSmallTextBoost { get; set; } = true;
 
         /// <summary>CPU 推理线程数，0 表示按机器核数自动选择</summary>
         public int OcrCpuThreads { get; set; } = 0;

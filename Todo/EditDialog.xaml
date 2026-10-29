@@ -13,9 +13,10 @@
 
     <!-- 与主窗口一致：圆角 + 半透明白色背景 -->
     <Border Background="#D9FFFFFF"
-            CornerRadius="10"
+            CornerRadius="{StaticResource Radius12}"
             BorderBrush="#22000000"
-            BorderThickness="1">
+            BorderThickness="1"
+            Effect="{StaticResource WinShadow}">
         <StackPanel Margin="14,12">
 
             <!-- 标题行：可拖动 -->

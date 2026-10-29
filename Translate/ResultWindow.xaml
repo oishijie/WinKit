@@ -1,8 +1,8 @@
 <Window x:Class="WinKit.Translate.ResultWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Translate" Width="440" Height="320"
-        MinWidth="320" MinHeight="200"
+        Title="Translate" Width="460" Height="360"
+        MinWidth="340" MinHeight="240"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -13,173 +13,212 @@
         ResizeMode="CanResize"
         PreviewKeyDown="ResultWindow_PreviewKeyDown">
 
-    <Window.Resources>
-        <!-- 结果窗顶部小按钮统一样式（复制 / 翻译 / 搜索） -->
-        <Style x:Key="ResultActionBtn" TargetType="Button">
-            <Setter Property="Background" Value="Transparent"/>
-            <Setter Property="BorderThickness" Value="1"/>
-            <Setter Property="BorderBrush" Value="#44000000"/>
-            <Setter Property="Foreground" Value="#444"/>
-            <Setter Property="FontSize" Value="10.5"/>
-            <Setter Property="Height" Value="22"/>
-            <Setter Property="Padding" Value="9,0"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="Button">
-                        <Border Background="{TemplateBinding Background}"
-                                BorderBrush="{TemplateBinding BorderBrush}"
-                                BorderThickness="{TemplateBinding BorderThickness}"
-                                CornerRadius="4">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter Property="Background" Value="#14000000"/>
-                            </Trigger>
-                            <Trigger Property="IsEnabled" Value="False">
-                                <Setter Property="Foreground" Value="#AAA"/>
-                                <Setter Property="BorderBrush" Value="#22000000"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
-    </Window.Resources>
+    <!--
+        布局契约（方案 A · 卡片化统一）
+        ──────────────────────────────────────────────
+        标题行只放「标题 + 窗口控制」，业务操作一律下沉到底部操作条。
+        此前 [复制][翻译][搜索] 与 📌✕ 全挤在 36px 标题行里，五个可点目标
+        相互贴着、状态文字被挤到截断。改动后：
+          标题行 36  标题 + 两侧带间距的窗口控制
+          内容   *   原文 / 结果各自一张卡片，块与块之间有边界
+          操作条 40  左状态右按钮，复制用 Primary 分级
+          抓手   12  右下角 ResizeGrip（此前 CanResize 却没有抓手）
 
+        样式全部来自 App.xaml 的 WinBtn / WinBtnPrimary / WinShadow，
+        不再保留本窗口私有的 ResultActionBtn。
+    -->
+
+    <!-- Margin 为投影留出扩散空间：AllowsTransparency 窗口的绘制被裁剪到窗口矩形，
+         不留边的话阴影外扩部分会被直接切掉。窗口宽高已相应 +20，背板可视尺寸不变。 -->
     <Border x:Name="RootBorder"
+            Margin="10"
             Background="#CCFFFFFF"
-            CornerRadius="10"
+            CornerRadius="{StaticResource Radius12}"
             BorderBrush="#22000000"
-            BorderThickness="1">
+            BorderThickness="1"
+            Effect="{StaticResource WinShadow}">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="26"/>
                 <RowDefinition Height="36"/>
                 <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="12"/>
             </Grid.RowDefinitions>
 
-            <!-- ═══ 顶部状态栏（原在底部，移至顶部避免被截图 OCR 误识别） ═══ -->
-            <Grid Grid.Row="0" Margin="10,0">
+            <!-- ═══ 标题行 ═══ -->
+            <Grid Grid.Row="0" x:Name="TitleBar"
+                  MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"
+                  MouseEnter="TitleBar_MouseEnter"
+                  MouseLeave="TitleBar_MouseLeave"
+                  Background="Transparent">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="Auto"/>
                     <ColumnDefinition Width="*"/>
                     <ColumnDefinition Width="Auto"/>
                 </Grid.ColumnDefinitions>
-                <Button x:Name="CopyBtn"
-                        Grid.Column="0"
-                        Content="复制"
-                        Width="56"
-                        Style="{StaticResource ResultActionBtn}"
-                        Cursor="Hand"
-                        Click="CopyBtn_Click"/>
-                <TextBlock x:Name="StatusText"
-                           Grid.Column="1"
-                           HorizontalAlignment="Left"
+
+                <TextBlock x:Name="TitleText"
+                           Grid.Column="0"
+                           Text="翻译结果"
                            VerticalAlignment="Center"
-                           Margin="8,0,0,0"
-                           FontSize="11"
-                           Foreground="#888"
+                           Margin="14,0,8,0"
+                           FontSize="13"
+                           FontWeight="SemiBold"
+                           Foreground="#333"
                            TextTrimming="CharacterEllipsis"/>
-                <StackPanel x:Name="ActionPanel"
-                            Grid.Column="2"
+
+                <StackPanel x:Name="TitleButtons"
+                            Grid.Column="1"
                             Orientation="Horizontal"
                             HorizontalAlignment="Right"
                             VerticalAlignment="Center"
-                            Visibility="Collapsed">
-                    <Button x:Name="TranslateBtn"
-                            Content="翻译"
-                            Margin="0,0,6,0"
-                            Style="{StaticResource ResultActionBtn}"
-                            Click="TranslateBtn_Click"
-                            ToolTip="翻译识别出的文字"/>
-                    <Button x:Name="SearchBtn"
-                            Content="搜索"
-                            Style="{StaticResource ResultActionBtn}"
-                            Click="SearchBtn_Click"
-                            ToolTip="用默认浏览器搜索识别出的文字"/>
-                </StackPanel>
-            </Grid>
-
-            <!-- ═══ 标题栏 ═══ -->
-            <Grid Grid.Row="1" x:Name="TitleBar"
-                  MouseLeftButtonDown="TitleBar_MouseLeftButtonDown"
-                  Background="Transparent">
-                <TextBlock x:Name="TitleText"
-                           Text="翻译结果"
-                           VerticalAlignment="Center"
-                           Margin="14,0"
-                           FontSize="13"
-                           FontWeight="SemiBold"
-                           Foreground="#333"/>
-                <StackPanel Orientation="Horizontal"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Center">
+                            Margin="0,0,4,0"
+                            Opacity="0.5">
                     <Button x:Name="PinBtn"
                             Content="📌"
                             Style="{StaticResource TitleBarBtn}"
                             Opacity="1"
                             Click="PinBtn_Click"
                             ToolTip="钉住窗口"/>
-                    <Button Content="✕"
+                    <Button x:Name="CloseBtn"
+                            Content="✕"
                             Style="{StaticResource TitleBarBtn}"
-                            Margin="0,0,4,0"
                             Opacity="1"
                             Click="CloseBtn_Click"
                             ToolTip="隐藏"/>
                 </StackPanel>
             </Grid>
 
-            <!-- ═══ 内容区 ═══ -->
-            <ScrollViewer Grid.Row="2"
+            <!-- ═══ 内容区：原文 / 结果各成一张卡片 ═══ -->
+            <ScrollViewer Grid.Row="1"
                           Style="{StaticResource NarrowScrollViewer}"
-                          Padding="14,4,14,8"
+                          Padding="12,8,12,4"
                           Focusable="False">
                 <StackPanel>
-                    <!-- 原文区（可编辑，可先改掉 OCR 错字再翻译/搜索） -->
-                    <StackPanel x:Name="SourceSection" Margin="0,0,0,8">
-                        <TextBlock Text="原文"
-                                   FontSize="11"
-                                   Foreground="#888"
-                                   Margin="0,0,0,3"/>
-                        <TextBox x:Name="SourceBox"
-                                 FontSize="12.5"
-                                 Foreground="#555"
-                                 TextWrapping="Wrap"
-                                 AcceptsReturn="True"
-                                 BorderThickness="0"
-                                 Background="Transparent"
-                                 Padding="0"
-                                 IsReadOnly="False"
-                                 CaretBrush="#333"
-                                 TextChanged="SourceBox_TextChanged"/>
-                    </StackPanel>
+                    <Border x:Name="SourceSection"
+                            Background="#0A000000"
+                            BorderBrush="#1F000000"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource Radius8}"
+                            Padding="10,8"
+                            Margin="0,0,0,8"
+                            Visibility="Collapsed">
+                        <StackPanel>
+                            <TextBlock Text="原文"
+                                       FontSize="11"
+                                       Foreground="#888"
+                                       Margin="0,0,0,4"/>
+                            <TextBox x:Name="SourceBox"
+                                     FontSize="12.5"
+                                     Foreground="#555"
+                                     TextWrapping="Wrap"
+                                     AcceptsReturn="True"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     Padding="0"
+                                     IsReadOnly="False"
+                                     CaretBrush="#333"
+                                     TextChanged="SourceBox_TextChanged"/>
+                        </StackPanel>
+                    </Border>
 
-                    <!-- 分隔线 -->
-                    <Border Height="1" Background="#22000000" Margin="0,2,0,8"
-                            x:Name="Separator" Visibility="Collapsed"/>
-
-                    <!-- 译文/识别结果区（可编辑） -->
-                    <TextBlock x:Name="TargetLabel"
-                               Text="译文"
-                               FontSize="11"
-                               Foreground="#888"
-                               Margin="0,0,0,3"/>
-                    <TextBox x:Name="TargetBox"
-                             Text="识别中..."
-                             FontSize="14"
-                             Foreground="#222"
-                             TextWrapping="Wrap"
-                             AcceptsReturn="True"
-                             BorderThickness="0"
-                             Background="Transparent"
-                             Padding="0"
-                             IsReadOnly="False"
-                             CaretBrush="#333"
-                             TextChanged="TargetBox_TextChanged"/>
+                    <!-- 结果卡片。纯识别场景标题已写明「文字识别」，
+                         TargetLabel 由代码收成空串并隐藏，避免重复信息。 -->
+                    <Border Background="#0A000000"
+                            BorderBrush="#1F000000"
+                            BorderThickness="1"
+                            CornerRadius="{StaticResource Radius8}"
+                            Padding="10,8">
+                        <StackPanel>
+                            <TextBlock x:Name="TargetLabel"
+                                       Text="译文"
+                                       FontSize="11"
+                                       Foreground="#888"
+                                       Margin="0,0,0,4"/>
+                            <TextBox x:Name="TargetBox"
+                                     Text="识别中..."
+                                     FontSize="14"
+                                     Foreground="#222"
+                                     TextWrapping="Wrap"
+                                     AcceptsReturn="True"
+                                     BorderThickness="0"
+                                     Background="Transparent"
+                                     Padding="0"
+                                     IsReadOnly="False"
+                                     CaretBrush="#333"
+                                     TextChanged="TargetBox_TextChanged"/>
+                        </StackPanel>
+                    </Border>
                 </StackPanel>
             </ScrollViewer>
+
+            <!-- ═══ 底部操作条：左状态、右按钮 ═══ -->
+            <Border Grid.Row="2"
+                    BorderBrush="#1A000000"
+                    BorderThickness="0,1,0,0"
+                    Padding="12,7">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock x:Name="StatusText"
+                               Grid.Column="0"
+                               VerticalAlignment="Center"
+                               Margin="0,0,8,0"
+                               FontSize="11"
+                               Foreground="#888"
+                               TextTrimming="CharacterEllipsis"/>
+
+                    <StackPanel Grid.Column="1"
+                                Orientation="Horizontal"
+                                VerticalAlignment="Center">
+                        <Button x:Name="CopyBtn"
+                                Content="复制"
+                                Style="{StaticResource WinBtnPrimary}"
+                                Click="CopyBtn_Click"
+                                ToolTip="复制结果（Ctrl+C）"/>
+                        <StackPanel x:Name="ActionPanel"
+                                    Orientation="Horizontal"
+                                    Visibility="Collapsed">
+                            <Button x:Name="TranslateBtn"
+                                    Content="翻译"
+                                    Margin="6,0,0,0"
+                                    Style="{StaticResource WinBtn}"
+                                    Click="TranslateBtn_Click"
+                                    ToolTip="翻译识别出的文字"/>
+                            <Button x:Name="SearchBtn"
+                                    Content="搜索"
+                                    Margin="6,0,0,0"
+                                    Style="{StaticResource WinBtn}"
+                                    Click="SearchBtn_Click"
+                                    ToolTip="用默认浏览器搜索识别出的文字（Enter）"/>
+                        </StackPanel>
+                    </StackPanel>
+                </Grid>
+            </Border>
+
+            <!-- ═══ 右下角抓手 ═══ -->
+            <Grid Grid.Row="3" HorizontalAlignment="Right" VerticalAlignment="Bottom">
+                <Border x:Name="ResizeGripArea"
+                        Width="12" Height="12"
+                        Background="Transparent"
+                        Cursor="SizeNWSE"
+                        Opacity="0"
+                        MouseEnter="ResizeGrip_MouseEnter"
+                        MouseLeave="ResizeGrip_MouseLeave"
+                        MouseLeftButtonDown="ResizeGrip_MouseLeftButtonDown"
+                        ToolTip="拖动调整大小">
+                    <Canvas Width="9" Height="9"
+                            HorizontalAlignment="Right"
+                            VerticalAlignment="Bottom">
+                        <Line X1="9" Y1="4" X2="4" Y2="9"
+                              Stroke="#88888888" StrokeThickness="1.2" StrokeEndLineCap="Round"/>
+                        <Line X1="9" Y1="7" X2="7" Y2="9"
+                              Stroke="#88888888" StrokeThickness="1.2" StrokeEndLineCap="Round"/>
+                    </Canvas>
+                </Border>
+            </Grid>
         </Grid>
     </Border>
 </Window>

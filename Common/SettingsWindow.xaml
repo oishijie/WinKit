@@ -410,12 +410,10 @@
 
     <Border x:Name="RootBorder"
             Background="#FAF7F7F7"
-            CornerRadius="10"
+            CornerRadius="{StaticResource Radius12}"
             BorderBrush="#1A000000"
-            BorderThickness="1">
-        <Border.Effect>
-            <DropShadowEffect BlurRadius="14" ShadowDepth="2" Opacity="0.16" Color="Black"/>
-        </Border.Effect>
+            BorderThickness="1"
+            Effect="{StaticResource WinShadow}">
 
         <Grid>
             <Grid.RowDefinitions>
@@ -1410,7 +1408,7 @@
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
                                             <TextBlock Text="文字方向分类" Style="{StaticResource RowLabel}"/>
-                                            <TextBlock Text="识别竖排或旋转文字时开启；截图场景通常不需要，关闭可省一次推理" Style="{StaticResource RowHint}"/>
+                                            <TextBlock Text="默认开启；倒置文字（翻转截图 / 拍屏照片）靠它判 0° 与 180°，关闭后这类内容会出乱码" Style="{StaticResource RowHint}"/>
                                         </StackPanel>
                                         <CheckBox x:Name="AngleClsToggle" Grid.Column="1"
                                                   Style="{StaticResource ToggleSwitch}"
@@ -1441,12 +1439,12 @@
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
                                         <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,16,0">
-                                            <TextBlock Text="MKL-DNN 加速" Style="{StaticResource RowLabel}"/>
-                                            <TextBlock Text="Intel CPU 上显著提速；个别机器不稳定时可关闭" Style="{StaticResource RowHint}"/>
+                                            <TextBlock Text="小字增强" Style="{StaticResource RowLabel}"/>
+                                            <TextBlock Text="桌面正文常只有 12~16px，而识别头按 48px 训练。检出小字时自动放大重识别一遍，最多多跑一次推理" Style="{StaticResource RowHint}"/>
                                         </StackPanel>
-                                        <CheckBox x:Name="MkldnnToggle" Grid.Column="1"
+                                        <CheckBox x:Name="SmallTextBoostToggle" Grid.Column="1"
                                                   Style="{StaticResource ToggleSwitch}"
-                                                  Click="MkldnnToggle_Click"/>
+                                                  Click="SmallTextBoostToggle_Click"/>
                                     </Grid>
 
                                     <Border Height="1" Background="#0F000000"/>

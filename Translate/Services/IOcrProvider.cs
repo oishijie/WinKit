@@ -12,6 +12,11 @@ namespace WinKit.Translate.Services
     /// 全部实现均为本地离线引擎：直接接收位图，不做任何网络请求，
     /// 因此接口里没有 API Key、语言代码之类的在线服务概念
     /// （识别语种由加载哪一套模型决定，属于引擎构造期的配置）。
+    ///
+    /// 设计约定（v2.4 起）：**调用方只依赖本接口**。
+    /// 引擎的配置变更、内存回收、初始化错误上报都必须在这里有对应成员，
+    /// 不允许只长在具体实现类上 —— 否则「换引擎」就得连调用方一起改，
+    /// 抽象层等于白做。
     /// </summary>
     public interface IOcrProvider : IDisposable
     {
@@ -22,7 +27,13 @@ namespace WinKit.Translate.Services
         bool IsReady { get; }
 
         /// <summary>
-        /// 预热引擎。本地推理引擎的初始化需要数秒（加载 ~390MB 原生库与模型），
+        /// 初始化失败的原因，未失败为 null。
+        /// 供设置页「引擎状态」直接展示，避免用户只看到"识别失败"四个字。
+        /// </summary>
+        string? InitializationError { get; }
+
+        /// <summary>
+        /// 预热引擎。本地推理引擎的初始化需要数秒（加载原生库与模型），
         /// 应在后台提前触发，避免用户第一次按下热键时长时间等待。
         /// </summary>
         Task WarmUpAsync(CancellationToken ct = default);
@@ -31,5 +42,18 @@ namespace WinKit.Translate.Services
         /// 识别位图中的文字。调用方负责释放传入的位图。
         /// </summary>
         Task<OcrResult> RecognizeAsync(Bitmap image, CancellationToken ct = default);
+
+        /// <summary>
+        /// 应用新的引擎配置。
+        /// 实现方需自行判断哪些参数会触发昂贵重建、哪些可以就地生效：
+        /// 无脑重建会让用户每改一个无关选项就白等数秒。
+        /// </summary>
+        Task ReconfigureAsync(OcrEngineOptions options, CancellationToken ct = default);
+
+        /// <summary>
+        /// 主动请求尽快释放推理实例、压缩工作集（如结果窗关闭后立即瘦身）。
+        /// 未开启自动瘦身的实现可以安全地忽略此调用。
+        /// </summary>
+        void RequestSlimNow();
     }
 }
