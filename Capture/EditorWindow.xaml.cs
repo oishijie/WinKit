@@ -194,6 +194,15 @@ namespace WinKit.Capture
             }
         }
 
+        private void PinBtn_Click(object sender, RoutedEventArgs e)
+        {
+            // 钉图：把当前合成结果（底图 + 标注）钉到桌面，然后关闭编辑器
+            var img = ComposeImage();
+            var pin = new PinWindow(img);
+            pin.Show();
+            Close();
+        }
+
         private void SaveBtn_Click(object sender, RoutedEventArgs e)
         {
             var dlg = new Microsoft.Win32.SaveFileDialog
