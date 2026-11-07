@@ -3,6 +3,48 @@
 统一桌面助手：TodoList + Clipboard + 截图标注 + 本地 OCR 翻译。
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)；版本号见 `WinKit.csproj` 的 `<Version>`。
 
+## [2.4.1] — 2026-11-07
+
+### Fixed 修复
+- **【严重】「一编辑就闪退」**：用户实测连崩三次，Windows 事件日志（`.NET Runtime` Id=1026）给出同一堆栈 —— `System.ArgumentException: 指定的 Visual 已经是另一个 Visual 的子级或者已经是 CompositionTarget 的根`，`AnnotationController.AddCommitted` (line 90) ← `EditorWindow.Canvas_MouseLeftButtonUp` (line 663)。根因：`Canvas_MouseLeftButtonDown` 已经把预览元素 `Children.Add` 进 `OverlayCanvas`，而矩形 / 箭头 / 画笔 / 椭圆的 `Visual` 与 `CreatePreview()` 返回的是**同一个实例**，松手提交时 `AddCommitted` 又 Add 一次，WPF 不允许 Visual 有第二个父级。马赛克宿主也会自行 Add，同样命中。修法：`AddCommitted` 先 `Children.Contains(visual)` 判重，只有文字标注这类「松手后重建 Visual」的才真正挂载，顺带加 null 防守。该重复 Add 路径在轮 1 的工具条换皮中没有被触碰，属既有代码结构缺陷；叠加项目零冒烟测试 + 零异常兜底，一直表现为「一画标注就无声退出」。
+- **补齐全局异常兜底**：`App.OnStartup` 订阅 `DispatcherUnhandledException`，未处理的 UI 线程异常先写 `crash.log`（程序目录，含完整堆栈），再弹一次提示，`e.Handled = true` 保持托盘进程存活。此前项目**没有任何异常处理**，所以任何 UI 线程异常都直接击穿进程，排查只能靠翻事件日志（AGENTS.md 里「GUI 崩溃只表现为打不开」同源）。
+- **编辑器「大黑边」**：用户截图 705×97 实测，除左右各约 14px 桌面外，中间 82px 高几乎全是 `#1E1E1E/#202020` 深色，工具条图标只占中间约 16px。三处叠加：`RootBorder` 的不透明 `#FF202020` 底板 + `Margin=10` + `WinShadow` 投影 + 半透明白边；`ScrollViewer` / `ImageHost` 的 `#FF141414` 背景（小截图时窗口被 ~700px 胶囊条撑宽，右侧一整片露出黑底）；铺满整行带分隔线的状态条。现改为窗口整体透明、图片层透明、状态文字收成紧贴文字的小标签，`BaseImage` 仍铺满 `ImageHost`，`ComposeImage` 渲染逻辑一行未动 —— **只保留编辑条**。
+- **晾衣架（Rack）「点了没反应」** —— 这是一个从没真正跑通过的实验模块（CHANGELOG / ROADMAP / AGENTS 均无记录，且带有编译错误）。四条叠加根因：
+  ① `RackModule.LoadFromSources()` **全项目零调用点**，托盘点「晾衣架」只 `Show()` 了一个高 8px、全透明的空窗口，绳子画在 Y=20 被裁掉 —— 视觉上等于什么都没发生；
+  ② 从截图编辑器点「挂衣架」确实挂上了卡片，但 `DispatcherTimer` 每 50ms 轮询判定鼠标不在屏幕顶部，1.2s 后 `CollapseToTop()` 把窗口压回 8px，卡片一闪就没；
+  ③ `Control.MousePosition` 是**物理像素**，却与 WPF 的 DIP 坐标 `Left/Width/Height` 直接比较，125% / 150% 缩放下顶部热区永远命中不了，悬停展开也不会触发；
+  ④ 自动收起后窗口仍以 8px 热区 `IsVisible=true`，托盘 `Toggle()` 据此判定会先 Hide，用户要点两次才有反应。
+  修法：托盘首次打开时调用一次 `LoadFromSources()`（未完成待办 + 最近剪贴板文本 / 图片），所有入口统一走 `RackWindow.Reveal()`；自动收起加 `_autoHideArmed` 武装开关（只有鼠标真正进过展开窗口，离开后才允许收起，程序挂入的卡片保持展开）；鼠标坐标经 `PresentationSource.CompositionTarget.TransformFromDevice` 换算成 DIP；显隐状态改看 `IsExpanded` / `RackModule.IsActive`，收起走 `Dismiss()`。
+- **晾衣架透明窗口吞掉屏幕顶部点击**：`Background` 恒为 `null`（展开态空白区域穿透），`RopePath` 设 `IsHitTestVisible="False"`；热区判定本就靠 Win32 坐标轮询，不依赖 WPF 命中测试。收起态把绳子压成贴顶细线，保证「它还在」有可见反馈。
+- **三处编译阻断**（本机构建时才暴露，此前任何发布版都不可能含此模块）：`RectAnnotation` / `EllipseAnnotation` 的 `FillAlpha` 由 `double` 改为 `byte`（`Color.FromArgb` 需 byte）；`RackWindow.DrawRope` 的 `new BezierSegment(start, ctrl1, ctrl2, end, true)` 改为 4 参（起点由 `PathFigure.StartPoint` 提供）。
+- `AGENTS.md` 里 `VerifyLocalOcrRuntime` 更正为 csproj 实际的目标名 `VerifyLocalOcrModels`。
+
+### Added 新增
+- 晾衣架空态提示（无卡片时也能看出「已打开」）、托盘菜单按状态显示「晾衣架 / 收起晾衣架」、`SizeChanged` 后按卡片实际宽度重排、窗口 `Closed` 时停掉 50ms 轮询计时器。
+- **本地编译门禁**：`tools/preflight.ps1` 自动检查 SDK / restore / build 0 错误 0 警告 / 核心 7 件套 / `models/` 7 文件 / 无 `runtimes/` / 产物体积 / 版本一致性共 10 项，退出码非 0 不许提交；`docs/local-preflight-checklist.md` 给出 12 项人工冒烟自检与发版四件套 + 三镜像资产清单。目的是把「编译错误进仓库」从偶发事故变成提交前必被拦下的事件 —— 纯本机按需执行，不接入任何远程自动化服务。
+- `README.md` 快捷键表补齐 `Win + V`（剪贴板面板，含 Win 键走低级钩子）与 `Alt + T`（待办窗口）两条可配置热键，并修正「所有快捷键都在翻译与 OCR 分区」的旧描述。
+- **截图选区层对齐 SnowAir（复刻轮 1）**：`#34C759` 1px 绿框、8 个白色方形夹点（四角 + 四边中点）、深灰 75% 信息条显示 `X / Y / W×H`。坐标与尺寸统一报**物理像素**，高 DPI 或负坐标副屏下不再出现「显示尺寸 ≠ 实际位图尺寸」。夹点层 `IsHitTestVisible="False"`，框选与 `Complete()` 主流程未动。
+- **标注工具条换成黑色胶囊 17 键图标条（复刻轮 1）**：新增 `Capture/CaptureIcons.xaml`，30 个 24×24 `StreamGeometry` —— 18 个从 `SnowAir-main/images/icon/*.svg` 提取，12 个按同网格手绘补齐。主条槽位按 `show-cursor / rect / arrow / pen / text / number / mosaic / eraser / undo / more / pin / ocr / translate / long / save / cancel / confirm` 排列；未实现的能力保留槽位但**禁用 + 高亮提示「后续版本」**，不做点了没反应的死按钮。
+- **「更多」浮动子工具条**：颜色 5 色、线宽 3 档、椭圆、重做、挂衣架，外加直线 / 聚焦两个占位；浮在图像上不占布局高度，子条内显示当前工具名，避免选中态落在子条里时主条看不出状态。
+- 胶囊条拖动只响应左侧把手与空白处：`IsInsideButton` 沿可视树回溯 `ButtonBase`，避免 `DragMove()` 吞掉图标按钮的 Click。
+- **文字标注（复刻轮 2 第 1 项）**：胶囊条第 5 键从禁用占位改为可用工具。点选后在图上拖出 `#34C759` 1px 虚线文本框，松手自动聚焦就地输入；框上方浮一条样式条（5 色 + 字号 −/+ + 确定 / 取消）。`Enter` 或 ✓ = 提交，`Esc` 或 ✕ = 取消，点击编辑区外即提交，空文本直接丢弃且不进撤销栈。提交后成为普通标注：虚线选中框 + 8 个白色控制点，可拖动、改色、`Delete` 删除、`Ctrl+Z` 撤销、横向缩放（文字自动换行、字号不变）。
+  - 新增 `Capture/Annotations/TextAnnotation.cs`：`IAnnotation` 的第 7 个实现，与 `MosaicAnnotation` 同属「松手后由宿主接管」的两阶段标注。`SupportsRotation=false`，`Thickness` 只存不用（字号由样式条单独给，避免线宽滑块意外改字号）。`ToolKind` 加 `Text` 并注册工厂。
+  - 输入框与样式条只在编辑期间挂在 `OverlayCanvas` 上，提交 / 取消时立即移除；`ComposeImage()` 的 `RenderTargetBitmap` 渲染逻辑一行未改，只在入口加「收尾编辑 + 去选中态」两行兜底，因此**光标、样式条、控制点都不会被截进导出图片**。
+  - 键盘冲突：编辑期间 `Window_KeyDown` 整体让路（`Esc` 只取消编辑，`Delete` / `Ctrl+Z` / `Ctrl+Y` 交给 `TextBox` 自带行为），编辑结束归还。焦点离开输入框会延迟一帧提交，并用 `TextStyleBar.IsMouseOver` 放行样式条按钮，避免「颜色还没点下去编辑就被收掉」。
+- **轮 2 剩余 5 项一次落地**（草图经批准后批量实现，中途不逐项停）：
+  - **序号标注**：胶囊第 6 键解禁。点一下放一个 28px 圆徽标，自动 1→2→3，可连点；删除 / 撤销 / 重做**不重排已有编号**。走 `MouseDown` 直接 `AddCommitted` 的捷径，不进「预览 → 拖拽 → 提交」链路，避免徽标先在 `(0,0)` 闪一帧。新增 `NumberAnnotation`，固定尺寸、不支持旋转，选中显示亮绿虚线外框。
+  - **直线**：子工具条第 2 键解禁。新增 `LineAnnotation`，复用 `ArrowAnnotation` 的点到线段命中 / 平移 / 旋转 / 快照，几何只少了末端两撇箭头；描边色与线宽跟随当前调色板和三档线宽。
+  - **聚焦高亮**：子工具条第 5 键解禁。拖矩形后框内原样、框外压暗 `#8C000000`（55%）。实现为覆盖整张画布的 `Geometry.Combine(全画布矩形, 高亮矩形, Exclude)`，因此遮罩天然随 `ComposeImage()` 进导出图，无需额外合成。`HitTest` 只认边框附近 6px 的带 —— 否则整块画布都能点中它，用户就再也无法在框内画新标注。支持 8 控点缩放 / 拖动 / 撤销，新增 `HighlightAnnotation`。
+  - **OCR**：胶囊第 12 键解禁。对「底图 + 已有标注」的 `ComposeImage()` 结果做离线识别，结果弹进**现有 `ResultWindow`**（复制 / 翻译 / 搜索 / 钉图 / 置信度状态栏全部白拿），编辑器保持打开。
+  - **翻译**：胶囊第 13 键解禁。先 OCR 再走 `ITranslator`，沿用设置里的 Provider / Key / 源目标语言，结果同样进 `ResultWindow`；Key 型引擎未配 Key 时只在编辑器状态栏提示，不弹空白结果窗。
+  - 接线：`TranslateModule` 新增 `RecognizeEditorImageAsync` / `TranslateEditorImageAsync` / `RecognizeBitmapAsync` / `IsTranslatorConfigured`，**复用主实例的 `_ocr` 与 `_translator`**，不新建第二个 200~300MB 引擎；`BitmapSource → PNG → GDI+ Bitmap` 交给 `IOcrProvider.RecognizeAsync`，识别历史照常落库。结果窗与编辑器同为置顶，弹窗前编辑器临时 `Topmost=false`，点回编辑器时由 `Activated` 恢复。
+  - 仍为禁用占位：第 1 键「显示鼠标指针」、第 14 键「长截图」（属轮 3，需滚动拼接与新依赖）。
+
+### Changed 变更
+- 版本号 2.4.0 → **2.4.1**；`WinKit.csproj` / `CHANGELOG` / `latest.json` 三处已对齐，README 快捷键表同步。**三镜像资产待上传**，`latest.json` 的 `note` 保留「待发布」标记，上传完成后删除。
+- `EditorWindow` 按钮重命名与参数槽位调整：`UndoBtn/RedoBtn → BtnUndo/BtnRedo`、`ToolBar_MouseLeftButtonDown → CapBar_MouseLeftButtonDown`；`Tag` 改存 `StreamGeometry`，工具名与线宽数值改走 `CommandParameter`，`Tool_Checked` / `Width_Checked` 同步改读它。
+- `tools/preflight.ps1`：进程内固定 `DOTNET_CLI_UI_LANGUAGE=en`，改用英文摘要 `N Error(s) / N Warning(s)` 精确解析。旧实现用「任意非零数字 + 一个词」的宽松匹配，会把失败构建里的「1 个错误」误判成 1 条警告（本次复刻首次构建实测触发）；解析不到摘要时回退到诊断文本匹配，不再产生假红字。
+
 ## [2.4.0] — 2026-10-29
 
 ### Fixed 修复

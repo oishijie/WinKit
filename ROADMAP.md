@@ -38,8 +38,20 @@
 ### 4. 常用短语（上游 v2.11 的 vv 模块，可选）
 - [ ] 移植 `QuickPhrase*` 系列；核心难点：vv 连击判定与中文输入法状态识别长在 `KeyboardHookService` 里，需把该段（约 60 行）手工移植进本仓库钩子，**不得整体覆盖**（会毁掉 0xFF 防开始菜单机制）
 
+### 5. 晾衣架（Rack）MVP 可用性（已完成，2026-11-07）
+- [x] 首次打开自动装载待办 / 剪贴板内容、空态提示、托盘菜单状态（收起 / 展开）同步
+- [x] 修复高 DPI 下顶部热区失效、挂入卡片 1.2 秒后消失、自动收起后需点两次、透明窗口吞掉屏幕顶部点击
+- [x] 补全模块文档（`AGENTS.md` 架构铁律 + README 功能说明 + CHANGELOG）
+- [ ] 持久化（当前 MVP 重启清空）、卡片单独移除 / 拖回排序
+
 ## 中期
 
+- **net10 迁移（可行性已评估 2026-11-07，⭐ 只评估、未动 TFM）**：`net8.0-windows` 的官方支持在 **2026-11-10** 结束（微软支持策略，最后补丁 8.0.33）。实测结论 **可行、风险中低**：
+  - 本机已有 SDK **10.0.302**、`Microsoft.WindowsDesktop.App` 运行时 **10.0.10 / 10.0.13**、ref pack **10.0.10**，工具链齐备。
+  - **RapidOcrNet 4.2.0 直接支持**：`lib/net10.0` + `lib/net8.0` 双资产，nuspec 里明确声明 `targetFramework="net10.0"` 依赖组（Clipper2 2.0.0 / ONNX Runtime 1.29.0 / SkiaSharp 3.119.1）。迁移不必换 OCR 引擎。
+  - ONNX 原生 `onnxruntime.dll` 位于 `runtimes/win-x64/native`，**与 TFM 无关**；托管 `OnnxRuntime.Managed` 最细到 `net8.0` / `netstandard2.0`，net10 项目可向下引用。`SkiaSharp 3.119.1`、`System.Drawing.Common 8.0.7`、`Sqlite 8.0.0`、`ProtectedData 8.0.0` 同理都有 net8.0 或 netstandard2.0 资产。
+  - ⚠️ **唯一硬阻塞**：`Directory.Build.props` 把三个 ref pack 版本钉死在 **8.0.33**（SDK 10 还原 net8 的镜像补丁）。改 TFM 到 `net10.0-windows` 时必须先删掉或改成「仅 net8 生效」的条件属性，否则 SDK 10 会拿 8.0.33 去当 net10 的引用程序集。
+  - 前置四步（**本轮不做**）：① 条件化 `Directory.Build.props` → ② 用命令行 `-p:TargetFramework=net10.0-windows` 试构建，`obj/bin` 用 `-p:BaseIntermediateOutputPath` 隔离到临时目录，不污染工作区 → ③ 过 `tools/preflight.ps1` + `docs` 的 12 项人工冒烟（重点验 OCR 预热 / 全局热键 / 低级钩子）→ ④ 才改 `.csproj` 的 TFM 并更新门禁脚本的输出路径常量。
 - **翻译引擎补全**：DeepL / Azure 接入（`ITranslator` 接口已预留位），补设置项与测试。
 - **OCR 识别质量（第二轮，已完成 2026-10-29）**：大图缩放上限 960→2048、小字增强两遍制、置信度过滤与状态栏展示、`DetectAsync` 真取消、反色改 3×3 网格投票、`IOcrProvider` 接口补齐。详见 `CHANGELOG.md` Unreleased 段。
 - **OCR 剩余可选项**（按收益排序，均未开工）：

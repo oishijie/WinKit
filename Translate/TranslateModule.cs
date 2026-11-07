@@ -1,10 +1,12 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using WinKit.Capture;
 using WinKit.Common;
 using WinKit.Translate.Services;
@@ -280,6 +282,87 @@ namespace WinKit.Translate
             {
                 Stop();
             }
+        }
+
+        // ══════════════════════════════════════════════
+        //  截图编辑器调用入口（复用主实例引擎 / 结果窗）
+        // ══════════════════════════════════════════════
+
+        /// <summary>Key 型翻译引擎是否已配置好；Google 等免 Key 引擎恒为 true。</summary>
+        public bool IsTranslatorConfigured =>
+            _translator is not OpenAITranslator ||
+            !string.IsNullOrWhiteSpace(_translatorOptions.OpenAIApiKey);
+
+        /// <summary>编辑器「OCR」：对底图 + 标注的合成位图做离线识别，结果弹现有结果窗。</summary>
+        public async Task RecognizeEditorImageAsync(BitmapSource image, CancellationToken ct = default)
+        {
+            var window = EnsureResultWindow();
+            window.SetLoading("标注 OCR", "", OcrLoadingHint());
+            window.ShowAtMouse();
+
+            var ocr = await RecognizeBitmapAsync(image, ct).ConfigureAwait(true);
+            if (ct.IsCancellationRequested) return;
+            if (!ocr.Success || string.IsNullOrWhiteSpace(ocr.Text))
+            {
+                window.SetResult("标注 OCR", "", "",
+                    status: ocr.Error ?? "未识别到文字", success: false);
+                return;
+            }
+
+            window.SetResult("标注 OCR", "", ocr.Text,
+                actionText: ocr.Text, status: OcrStatus(ocr));
+        }
+
+        /// <summary>编辑器「翻译」：先 OCR 再走 ITranslator，结果弹现有结果窗。</summary>
+        public async Task TranslateEditorImageAsync(BitmapSource image, CancellationToken ct = default)
+        {
+            var window = EnsureResultWindow();
+            window.SetLoading("标注翻译", "译文", OcrLoadingHint());
+            window.ShowAtMouse();
+
+            var ocr = await RecognizeBitmapAsync(image, ct).ConfigureAwait(true);
+            if (ct.IsCancellationRequested) return;
+            if (!ocr.Success || string.IsNullOrWhiteSpace(ocr.Text))
+            {
+                window.SetResult("标注翻译", "译文", "",
+                    status: ocr.Error ?? "未识别到文字", success: false);
+                return;
+            }
+
+            window.SetLoading("标注翻译", "译文", "翻译中…");
+            var t = await TranslateAsync(ocr.Text, ct).ConfigureAwait(true);
+            if (ct.IsCancellationRequested) return;
+            if (!t.Success)
+            {
+                window.SetResult("标注翻译", "译文", "", source: ocr.Text,
+                    status: t.Error, success: false);
+                return;
+            }
+
+            window.SetResult("标注翻译", "译文", t.Target,
+                source: ocr.Text, actionText: ocr.Text,
+                status: $"{OcrStatus(ocr)} · {_translator.Name}");
+        }
+
+        /// <summary>
+        /// WPF 位图 → GDI+ 位图 → 本地 OCR。PNG 编码留在 UI 线程（源是 Frozen 的
+        /// RenderTargetBitmap），真正的推理由 RapidOcrProvider 内部 Task.Run 承担。
+        /// 与热键链路共用 _ocr 实例和识别历史，绝不 new 第二个 200~300MB 引擎。
+        /// </summary>
+        private async Task<Models.OcrResult> RecognizeBitmapAsync(BitmapSource image, CancellationToken ct)
+        {
+            using var ms = new MemoryStream();
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(image));
+            encoder.Save(ms);
+            ms.Position = 0;
+
+            using var bitmap = new System.Drawing.Bitmap(ms);
+            var result = await _ocr.RecognizeAsync(bitmap, ct).ConfigureAwait(true);
+            if (ct.IsCancellationRequested) return Models.OcrResult.Fail("识别已取消");
+
+            RecordHistory(result);
+            return result;
         }
 
         // ══════════════════════════════════════════════

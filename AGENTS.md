@@ -4,8 +4,9 @@
 
 ## 怎么跑起来
 - 还原并构建：`dotnet restore` → `dotnet build -c Release`（输出 `bin/Release/net8.0-windows/`）。
-- 本地 OCR 依赖 `RapidOcrNet`（ONNX Runtime）；模型随仓库放在 `models/`（PP-OCRv6，约 37MB），**必须先 `dotnet restore`**，否则 `VerifyLocalOcrRuntime` 构建目标报错。
+- 本地 OCR 依赖 `RapidOcrNet`（ONNX Runtime）；模型随仓库放在 `models/`（PP-OCRv6，约 37MB），**必须先 `dotnet restore`**，否则 `VerifyLocalOcrModels` 构建目标报错。
 - 无头跑 `dotnet WinKit.dll` 可抓启动期托管异常（GUI 崩溃在桌面上只表现为「打不开」）。
+- **提交前门禁（必跑）**：`powershell -ExecutionPolicy Bypass -File tools\preflight.ps1`。自动检查 SDK / restore / 0 错误 0 警告 / 核心 7 件套 / `models/` 7 文件 / 无 `runtimes/` / 产物体积 / 版本一致性共 10 项，退出码非 0 不许提交；`docs/local-preflight-checklist.md` 是配套的人工冒烟 8 项与发版清单。为什么要有这道门禁：`Rack/` 曾带着三处编译错误进仓库且从未进过任何可运行版本，v2.4.0 / v2.3.3 的严重缺陷也都是编译期 0 错误 0 警告。**纯本机按需执行，不接入任何远程自动化服务**；改了 TFM / RID / 模型清单 / 版本号时同步更新脚本里的常量。
 
 ## 技术栈
 - net8.0-windows、x64（**ONNX Runtime 原生库仅提供 x64，进程锁定 x64**）、WPF + WinForms 混合。
@@ -71,6 +72,13 @@
   - `TextBlocks` / `BoxPoints` 是**数组**，用 `.Length`（写 `.Count` 会被解析成 LINQ 扩展方法，报 `CS0019`）。
   - `RapidOcr` 只接受 `SKBitmap`，`Bitmap → SKBitmap` 走逐行 `Marshal.Copy`，因此 `Prepare` 输出为 **32bpp**（`Bgra8888` + `Opaque` 是唯一无需二次转换的匹配格式）。
   - **字典文件名是 `PP-OCRv6_*_dict.txt`（大写 PP）**，与官方预设要求的 `ppocrv6_*_dict.txt` 不一致。目前路径全部由 `OcrModelCatalog.Resolve` 显式传入所以没事；将来若改用 `RapidOcrModelSet` 预设，必须先把文件名改小写，否则会报「模型在目录里却显示缺失」。
+
+- **晾衣架 `Rack/`（MVP，2026-11-07 才真正可用）**：`RackModule` 是被动容器（`HangImage` / `HangText` / `HangTodo`），`RackWindow` 是贴屏幕顶端的置顶透明分层窗口，卡片沿三次贝塞尔曲线排布。入口只有两处：托盘菜单「晾衣架」、截图编辑器工具条「挂衣架」。改这块前必读五条铁律：
+  ① **`LoadFromSources()` 必须由 `Toggle()` 首次显示时调用，且只调一次**（`_loaded` 守门）—— 它会 `Clear()`，重复调用会清掉用户手动挂的卡片；没有这次调用，托盘点开只是 Show 一个 8px 全透明空窗口，用户以为功能没生效。手动挂过内容后 `HangCore` 会置 `_loaded = true`，防止后续 Toggle 清空。
+  ② **自动收起必须「武装」**：`_autoHideArmed` 只有在鼠标真正进过展开窗口时才置 true，离开 `AutoHideMs` 后才 `CollapseToTop()`。程序侧 Hang 时鼠标通常还在编辑器 / 别的应用里，若也走自动收起，卡片 1.2 秒后一闪消失 —— 这正是「挂了没反应」的观感来源。所有入口统一走 `RackWindow.Reveal()`（Show + Expand + 解除武装）。
+  ③ **鼠标坐标必须换算 DIP**：`Control.MousePosition` 是物理像素，`Left / Top / Width / Height` 是 WPF DIP，要经 `PresentationSource.FromVisual(this).CompositionTarget.TransformFromDevice` 变换。混用会让 125% / 150% 缩放下顶部 8px 热区永远命中不了，悬停展开也就不触发。
+  ④ **逻辑显隐看 `IsExpanded`，不看 `Window.IsVisible`**：自动收起后窗口仍以 8px 热区存在，`IsVisible` 仍为 true；托盘文案（`RackModule.IsActive`）与 `Toggle()` 判定都走 `IsExpanded`，收起统一调 `Dismiss()`（Collapse + Hide）。否则自动收起后点菜单只会 Hide，要点两次才展开。
+  ⑤ **透明分层窗口 `Background` 恒为 `null`**、`RopePath.IsHitTestVisible="False"`：空白区域点击穿透到下层应用，热区靠 Win32 坐标轮询而非 WPF 命中测试；收起态把绳子压成贴顶细线作为「还在」的视觉反馈。窗口 `Closed` 要停掉 50ms 的 `DispatcherTimer`。
 
 ## 当前状态与下一步
 - v2.1.0：快捷键 UI 可配置、剪贴板图片支持 + 截图功能、OCR 模型热切换、DPAPI 加密、Pin 钉住、SQLite 连接优化、**单实例保护（Mutex + 唤醒已有实例）**、**剪贴板图片内容级去重（像素哈希）**、**Todo 完成态持久化（`- [x]` 任务列表格式 + 双击已完成删除）**。

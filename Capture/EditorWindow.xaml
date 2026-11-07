@@ -13,219 +13,444 @@
         KeyDown="Window_KeyDown">
 
     <!--
-        图片编辑器：保持深色（看图与标注需要中性暗底才判断得准颜色），
-        但按钮规范、圆角、分组与浅色浮窗共用同一套 App.xaml 资源。
-
-        工具条改为三段：
-          左  绘图工具（互斥选中）
-          中  历史（撤销 / 重做）
-          右  导出（复制为主操作）+ 关闭
-
-        原先所有动作从左排到右，「关闭」紧挨「另存为」容易误点，
-        状态文字挤在工具条最右被按钮顶到边缘；现在状态独立成底部一条。
+        图片标注编辑器。工具条按 SnowAir 截图栏复刻：
+          · 居中黑色胶囊条（#1E1E1E / 圆角 10 / 24px 拖拽把手）
+          · 17 个 24x24 图标键，槽位顺序与参考一致
+          · 「更多」展开浮动子工具条：颜色 / 线宽 / 椭圆 / 重做 / 挂衣架
+        仍然采用三段式窗口（图像 / 工具条 / 状态），保证大图滚动、
+        DPI 钳制、拖动与 ComposeImage 合成路径不变。
     -->
 
     <Window.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="/Capture/CaptureIcons.xaml"/>
+            </ResourceDictionary.MergedDictionaries>
 
-        <!-- 绘图工具（互斥选中）。选中态由纯亮蓝实心块改为淡蓝底 + 蓝字，
-             不再抢走图像本身的注意力。 -->
-        <Style x:Key="ToolBtn" TargetType="RadioButton">
-            <Setter Property="Foreground" Value="#CCCCCC"/>
-            <Setter Property="FontSize" Value="12"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Focusable" Value="False"/>
-            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
-                        <Border x:Name="bd" Background="Transparent"
-                                CornerRadius="{StaticResource Radius6}"
-                                Padding="12,4" Margin="1,0">
-                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
-                        </Border>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#24FFFFFF"/>
-                            </Trigger>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="bd" Property="Background" Value="#261A8CFF"/>
-                                <Setter TargetName="bd" Property="BorderBrush" Value="#4D1A8CFF"/>
-                                <Setter TargetName="bd" Property="BorderThickness" Value="1"/>
-                                <Setter Property="Foreground" Value="#7FB8FF"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+            <!-- ══ 胶囊图标按钮：绘图工具（互斥选中） ══
+                 Tag 存 StreamGeometry，CommandParameter 存工具名字符串。 -->
+            <Style x:Key="CapToolBtn" TargetType="RadioButton">
+                <Setter Property="Width" Value="36"/>
+                <Setter Property="Height" Value="36"/>
+                <Setter Property="Foreground" Value="#E8E8E8"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Border x:Name="bd" Background="Transparent" CornerRadius="8">
+                                <Path x:Name="ic"
+                                      Data="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
+                                      Fill="{TemplateBinding Foreground}"
+                                      Width="19" Height="19" Stretch="Uniform"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#24FFFFFF"/>
+                                    <Setter TargetName="ic" Property="Fill" Value="#FFFFFFFF"/>
+                                </Trigger>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#2634C759"/>
+                                    <Setter TargetName="ic" Property="Fill" Value="#34C759"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="ic" Property="Opacity" Value="0.28"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
 
-        <!-- 工具栏竖分隔线 -->
-        <Style x:Key="ToolSep" TargetType="Border">
-            <Setter Property="Width" Value="1"/>
-            <Setter Property="Height" Value="16"/>
-            <Setter Property="Background" Value="#33FFFFFF"/>
-            <Setter Property="Margin" Value="8,0"/>
-        </Style>
+            <!-- ══ 胶囊图标按钮：一次性动作 ══ -->
+            <Style x:Key="CapActionBtn" TargetType="Button">
+                <Setter Property="Width" Value="36"/>
+                <Setter Property="Height" Value="36"/>
+                <Setter Property="Foreground" Value="#E8E8E8"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="ToolTipService.ShowOnDisabled" Value="True"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="Transparent" CornerRadius="8">
+                                <Path x:Name="ic"
+                                      Data="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
+                                      Fill="{TemplateBinding Foreground}"
+                                      Width="19" Height="19" Stretch="Uniform"
+                                      HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#24FFFFFF"/>
+                                    <Setter TargetName="ic" Property="Fill" Value="#FFFFFFFF"/>
+                                </Trigger>
+                                <Trigger Property="IsPressed" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#38FFFFFF"/>
+                                </Trigger>
+                                <Trigger Property="IsEnabled" Value="False">
+                                    <Setter TargetName="ic" Property="Opacity" Value="0.28"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
 
-        <!-- 颜色选择按钮：圆形色块，选中时外围加白圈 -->
-        <Style x:Key="ColorBtn" TargetType="RadioButton">
-            <Setter Property="Width" Value="16"/>
-            <Setter Property="Height" Value="16"/>
-            <Setter Property="Margin" Value="3,0"/>
-            <Setter Property="Cursor" Value="Hand"/>
-            <Setter Property="Focusable" Value="False"/>
-            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
-            <Setter Property="Template">
-                <Setter.Value>
-                    <ControlTemplate TargetType="RadioButton">
-                        <Grid>
-                            <Ellipse x:Name="ring" Stroke="Transparent" StrokeThickness="2"
-                                     Width="16" Height="16"/>
-                            <Ellipse x:Name="dot" Width="12" Height="12"
-                                     Fill="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"/>
-                        </Grid>
-                        <ControlTemplate.Triggers>
-                            <Trigger Property="IsChecked" Value="True">
-                                <Setter TargetName="ring" Property="Stroke" Value="#FFFFFFFF"/>
-                            </Trigger>
-                        </ControlTemplate.Triggers>
-                    </ControlTemplate>
-                </Setter.Value>
-            </Setter>
-        </Style>
+            <Style x:Key="CapSep" TargetType="Border">
+                <Setter Property="Width" Value="1"/>
+                <Setter Property="Height" Value="18"/>
+                <Setter Property="Background" Value="#33FFFFFF"/>
+                <Setter Property="Margin" Value="6,0"/>
+            </Style>
 
+            <Style x:Key="SubLabel" TargetType="TextBlock">
+                <Setter Property="Foreground" Value="#8A8A8A"/>
+                <Setter Property="FontSize" Value="11"/>
+                <Setter Property="VerticalAlignment" Value="Center"/>
+                <Setter Property="Margin" Value="2,0,8,0"/>
+            </Style>
+
+            <!-- 子工具条里的文字型互斥按钮（线宽） -->
+            <Style x:Key="SubTextBtn" TargetType="RadioButton">
+                <Setter Property="Foreground" Value="#CCCCCC"/>
+                <Setter Property="FontSize" Value="12"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Border x:Name="bd" Background="Transparent" CornerRadius="6"
+                                    Padding="10,4" Margin="1,0">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#24FFFFFF"/>
+                                </Trigger>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#2634C759"/>
+                                    <Setter Property="Foreground" Value="#34C759"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- 文字样式条里的小号文字按钮：字号 -/+ 与确定/取消 -->
+            <Style x:Key="MiniBtn" TargetType="Button">
+                <Setter Property="Width" Value="26"/>
+                <Setter Property="Height" Value="26"/>
+                <Setter Property="Foreground" Value="#E8E8E8"/>
+                <Setter Property="FontSize" Value="15"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="Button">
+                            <Border x:Name="bd" Background="Transparent" CornerRadius="6">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                            </Border>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsMouseOver" Value="True">
+                                    <Setter TargetName="bd" Property="Background" Value="#24FFFFFF"/>
+                                    <Setter Property="Foreground" Value="#FFFFFFFF"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+
+            <!-- 颜色选择：圆形色块，选中时外围加白圈 -->
+            <Style x:Key="ColorBtn" TargetType="RadioButton">
+                <Setter Property="Width" Value="18"/>
+                <Setter Property="Height" Value="18"/>
+                <Setter Property="Margin" Value="3,0"/>
+                <Setter Property="Cursor" Value="Hand"/>
+                <Setter Property="Focusable" Value="False"/>
+                <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+                <Setter Property="Template">
+                    <Setter.Value>
+                        <ControlTemplate TargetType="RadioButton">
+                            <Grid>
+                                <Ellipse x:Name="ring" Stroke="Transparent" StrokeThickness="2"
+                                         Width="18" Height="18"/>
+                                <Ellipse x:Name="dot" Width="12" Height="12"
+                                         Fill="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"/>
+                            </Grid>
+                            <ControlTemplate.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter TargetName="ring" Property="Stroke" Value="#FFFFFFFF"/>
+                                </Trigger>
+                            </ControlTemplate.Triggers>
+                        </ControlTemplate>
+                    </Setter.Value>
+                </Setter>
+            </Style>
+        </ResourceDictionary>
     </Window.Resources>
 
-    <!-- Margin 为投影留扩散空间（同结果窗）。窗口是 SizeToContent，自动外扩 20px，
-         图像区尺寸不受影响。 -->
-    <Border x:Name="RootBorder"
-            Margin="10"
-            Background="#FF202020"
-            BorderBrush="#4DFFFFFF"
-            BorderThickness="1"
-            CornerRadius="{StaticResource Radius12}"
-            Effect="{StaticResource WinShadow}">
+    <!-- 窗口整体透明：只保留图片 + 黑色胶囊工具条 + 一行状态小字。
+         旧版这里是不透明 #FF202020 底板 + 10px 外边距 + 投影 + 白边，
+         会在工具条四周糊出一整圈「大黑边」，已全部去掉。 -->
+    <Border x:Name="RootBorder" Background="Transparent">
         <Grid>
             <Grid.RowDefinitions>
-                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <!-- ══ 工具栏（兼作拖动条） ══ -->
-            <Border x:Name="ToolBar"
-                    Grid.Row="0"
-                    Background="#FF2B2B2B"
-                    CornerRadius="11,11,0,0"
-                    MouseLeftButtonDown="ToolBar_MouseLeftButtonDown"
-                    Padding="8,7">
-                <Grid>
-                    <!-- 左：绘图工具 -->
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Left">
-                        <RadioButton x:Name="ToolRect" Content="矩形" GroupName="Tool"
-                                     Style="{StaticResource ToolBtn}" IsChecked="True"
-                                     Checked="Tool_Checked" Tag="Rect"/>
-                        <RadioButton x:Name="ToolEllipse" Content="椭圆" GroupName="Tool"
-                                     Style="{StaticResource ToolBtn}"
-                                     Checked="Tool_Checked" Tag="Ellipse"/>
-                        <RadioButton x:Name="ToolArrow" Content="箭头" GroupName="Tool"
-                                     Style="{StaticResource ToolBtn}"
-                                     Checked="Tool_Checked" Tag="Arrow"/>
-                        <RadioButton x:Name="ToolPen" Content="画笔" GroupName="Tool"
-                                     Style="{StaticResource ToolBtn}"
-                                     Checked="Tool_Checked" Tag="Pen"/>
-                        <RadioButton x:Name="ToolMosaic" Content="马赛克" GroupName="Tool"
-                                     Style="{StaticResource ToolBtn}"
-                                     Checked="Tool_Checked" Tag="Mosaic"/>
-                        <RadioButton x:Name="ToolEraser" Content="橡皮擦" GroupName="Tool"
-                                     Style="{StaticResource ToolBtn}"
-                                     Checked="Tool_Checked" Tag="Eraser"/>
-
-                        <Border Style="{StaticResource ToolSep}"/>
-
-                        <!-- 颜色选择：预设五色，互斥选中 -->
-                        <StackPanel x:Name="ColorPanel" Orientation="Horizontal" VerticalAlignment="Center">
-                            <RadioButton x:Name="ColorRed" GroupName="Color" Style="{StaticResource ColorBtn}"
-                                         Tag="#FF3B30" IsChecked="True" Checked="Color_Checked"/>
-                            <RadioButton x:Name="ColorYellow" GroupName="Color" Style="{StaticResource ColorBtn}"
-                                         Tag="#FFD60A" Checked="Color_Checked"/>
-                            <RadioButton x:Name="ColorGreen" GroupName="Color" Style="{StaticResource ColorBtn}"
-                                         Tag="#34C759" Checked="Color_Checked"/>
-                            <RadioButton x:Name="ColorBlue" GroupName="Color" Style="{StaticResource ColorBtn}"
-                                         Tag="#0A84FF" Checked="Color_Checked"/>
-                            <RadioButton x:Name="ColorWhite" GroupName="Color" Style="{StaticResource ColorBtn}"
-                                         Tag="#FFFFFF" Checked="Color_Checked"/>
-                        </StackPanel>
-
-                        <Border Style="{StaticResource ToolSep}"/>
-
-                        <!-- 线宽选择：细 / 中 / 粗 三档 -->
-                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                            <RadioButton x:Name="ThinWidth" GroupName="Width" Style="{StaticResource ToolBtn}"
-                                         Content="细" Tag="1.5" IsChecked="False" Checked="Width_Checked"/>
-                            <RadioButton x:Name="MidWidth" GroupName="Width" Style="{StaticResource ToolBtn}"
-                                         Content="中" Tag="2.5" IsChecked="True" Checked="Width_Checked"/>
-                            <RadioButton x:Name="ThickWidth" GroupName="Width" Style="{StaticResource ToolBtn}"
-                                         Content="粗" Tag="4" Checked="Width_Checked"/>
-                        </StackPanel>
-
-                        <Border Style="{StaticResource ToolSep}"/>
-
-                        <Button x:Name="UndoBtn" Content="撤销"
-                                Style="{StaticResource WinBtnDark}"
-                                IsEnabled="False" Click="UndoBtn_Click"/>
-                        <Button x:Name="RedoBtn" Content="重做"
-                                Style="{StaticResource WinBtnDark}"
-                                Margin="4,0,0,0"
-                                IsEnabled="False" Click="RedoBtn_Click"/>
-                    </StackPanel>
-
-                    <!-- 右：导出与关闭 -->
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Content="钉图" Style="{StaticResource WinBtnDark}"
-                                Click="PinBtn_Click" ToolTip="把当前截图钉到桌面"/>
-                        <Button Content="挂衣架" Style="{StaticResource WinBtnDark}"
-                                Margin="4,0,0,0"
-                                Click="RackBtn_Click" ToolTip="把当前截图挂到晾衣架"/>
-                        <Button Content="复制" Style="{StaticResource WinBtnDarkPrimary}"
-                                Margin="4,0,0,0"
-                                Click="CopyBtn_Click"/>
-                        <Button Content="另存为" Style="{StaticResource WinBtnDark}"
-                                Margin="4,0,0,0" Click="SaveBtn_Click"/>
-                        <Button Content="✕" Style="{StaticResource WinBtnDark}"
-                                Margin="8,0,0,0" Padding="10,4"
-                                Click="CloseBtn_Click" ToolTip="关闭"/>
-                    </StackPanel>
-                </Grid>
-            </Border>
-
-            <!-- ══ 图像 + 标注层（大图溢出屏幕时可滚动查看，工具栏始终可见） ══ -->
+            <!-- ══ 图像 + 标注层 ══ -->
             <ScrollViewer x:Name="ImageScroller"
-                          Grid.Row="1"
+                          Grid.Row="0"
                           VerticalScrollBarVisibility="Auto"
                           HorizontalScrollBarVisibility="Auto"
-                          Background="#FF141414"
+                          Background="Transparent"
                           Focusable="False">
-                <Grid x:Name="ImageHost" Background="#FF141414">
+                <!-- 小截图时窗口会被胶囊条撑宽，这里若填深色就会露出一大片黑底；
+                     改透明后图片之外直接透出桌面，BaseImage 铺满 ImageHost，
+                     ComposeImage 的渲染结果不受影响。 -->
+                <Grid x:Name="ImageHost" Background="Transparent">
                     <Image x:Name="BaseImage" Stretch="Fill"/>
                     <Canvas x:Name="OverlayCanvas"
                             Background="Transparent"
                             MouseLeftButtonDown="Canvas_MouseLeftButtonDown"
                             MouseMove="Canvas_MouseMove"
                             MouseRightButtonDown="Canvas_MouseRightButtonDown"
-                            MouseLeftButtonUp="Canvas_MouseLeftButtonUp"/>
+                            MouseLeftButtonUp="Canvas_MouseLeftButtonUp">
+
+                        <!-- ══ 文字标注就地编辑的浮动样式条 ══
+                             只在编辑期间存在，提交/取消时立即移除，
+                             因此不会被 ComposeImage 截进导出图片。 -->
+                        <Border x:Name="TextStyleBar"
+                                Visibility="Collapsed"
+                                Panel.ZIndex="20"
+                                Background="#F21E1E1E"
+                                BorderBrush="#33FFFFFF"
+                                BorderThickness="1"
+                                CornerRadius="8"
+                                Padding="6,4">
+                            <StackPanel Orientation="Horizontal">
+                                <RadioButton x:Name="TextColorRed" GroupName="TextColor"
+                                             Style="{StaticResource ColorBtn}" Tag="#FF3B30"
+                                             Focusable="False" IsChecked="True"
+                                             Checked="TextColor_Checked" ToolTip="红色"/>
+                                <RadioButton x:Name="TextColorYellow" GroupName="TextColor"
+                                             Style="{StaticResource ColorBtn}" Tag="#FFD60A"
+                                             Focusable="False" Checked="TextColor_Checked" ToolTip="黄色"/>
+                                <RadioButton x:Name="TextColorGreen" GroupName="TextColor"
+                                             Style="{StaticResource ColorBtn}" Tag="#34C759"
+                                             Focusable="False" Checked="TextColor_Checked" ToolTip="绿色"/>
+                                <RadioButton x:Name="TextColorBlue" GroupName="TextColor"
+                                             Style="{StaticResource ColorBtn}" Tag="#0A84FF"
+                                             Focusable="False" Checked="TextColor_Checked" ToolTip="蓝色"/>
+                                <RadioButton x:Name="TextColorWhite" GroupName="TextColor"
+                                             Style="{StaticResource ColorBtn}" Tag="#FFFFFF"
+                                             Focusable="False" Checked="TextColor_Checked" ToolTip="白色"/>
+
+                                <Border Style="{StaticResource CapSep}"/>
+
+                                <Button x:Name="BtnTextSizeDown" Style="{StaticResource MiniBtn}"
+                                        Content="-" Click="TextSizeDown_Click" ToolTip="缩小字号"/>
+                                <TextBlock x:Name="TextSizeLabel" Text="20"
+                                           Foreground="#CCCCCC" FontSize="12"
+                                           Width="26" TextAlignment="Center" VerticalAlignment="Center"/>
+                                <Button x:Name="BtnTextSizeUp" Style="{StaticResource MiniBtn}"
+                                        Content="+" Click="TextSizeUp_Click" ToolTip="放大字号"/>
+
+                                <Border Style="{StaticResource CapSep}"/>
+
+                                <Button x:Name="BtnTextOk" Style="{StaticResource CapActionBtn}"
+                                        Tag="{StaticResource CapIconCheck}" Foreground="#34C759"
+                                        Click="TextOk_Click" ToolTip="确定 (Enter)"/>
+                                <Button x:Name="BtnTextCancel" Style="{StaticResource CapActionBtn}"
+                                        Tag="{StaticResource CapIconClose}"
+                                        Click="TextCancel_Click" ToolTip="取消 (Esc)"/>
+                            </StackPanel>
+                        </Border>
+                    </Canvas>
                 </Grid>
             </ScrollViewer>
 
-            <!-- ══ 底部状态条：不再与按钮争抢工具栏宽度 ══ -->
+            <!-- ══ 浮动子工具条：由「更多」切换，浮在图像上不占布局高度 ══ -->
+            <Border x:Name="SubToolBar"
+                    Grid.Row="0"
+                    Panel.ZIndex="10"
+                    HorizontalAlignment="Center"
+                    VerticalAlignment="Bottom"
+                    Margin="0,0,0,12"
+                    Background="#F21E1E1E"
+                    BorderBrush="#33FFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="10"
+                    Padding="10,8"
+                    Visibility="Collapsed">
+                <StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <RadioButton x:Name="ToolEllipse" GroupName="Tool"
+                                     Style="{StaticResource CapToolBtn}"
+                                     Tag="{StaticResource CapIconEllipse}"
+                                     CommandParameter="Ellipse"
+                                     Checked="Tool_Checked" ToolTip="椭圆"/>
+                        <RadioButton x:Name="ToolLine" GroupName="Tool" Style="{StaticResource CapToolBtn}"
+                                     Tag="{StaticResource CapIconLine}" CommandParameter="Line"
+                                     Checked="Tool_Checked" ToolTip="直线"/>
+                        <Button x:Name="BtnRedo" Style="{StaticResource CapActionBtn}"
+                                Tag="{StaticResource CapIconRedo}"
+                                IsEnabled="False"
+                                Click="RedoBtn_Click" ToolTip="重做 (Ctrl+Y)"/>
+                        <Button x:Name="BtnRack" Style="{StaticResource CapActionBtn}"
+                                Tag="{StaticResource CapIconRack}"
+                                Click="RackBtn_Click" ToolTip="挂到晾衣架"/>
+                        <RadioButton x:Name="ToolHighlight" GroupName="Tool" Style="{StaticResource CapToolBtn}"
+                                     Tag="{StaticResource CapIconHighlight}" CommandParameter="Highlight"
+                                     Checked="Tool_Checked" ToolTip="聚焦高亮：拖框，框外压暗 55%"/>
+                        <Border Style="{StaticResource CapSep}"/>
+                        <TextBlock Text="颜色" Style="{StaticResource SubLabel}"/>
+                        <RadioButton x:Name="ColorRed" GroupName="Color" Style="{StaticResource ColorBtn}"
+                                     Tag="#FF3B30" IsChecked="True" Checked="Color_Checked"/>
+                        <RadioButton x:Name="ColorYellow" GroupName="Color" Style="{StaticResource ColorBtn}"
+                                     Tag="#FFD60A" Checked="Color_Checked"/>
+                        <RadioButton x:Name="ColorGreen" GroupName="Color" Style="{StaticResource ColorBtn}"
+                                     Tag="#34C759" Checked="Color_Checked"/>
+                        <RadioButton x:Name="ColorBlue" GroupName="Color" Style="{StaticResource ColorBtn}"
+                                     Tag="#0A84FF" Checked="Color_Checked"/>
+                        <RadioButton x:Name="ColorWhite" GroupName="Color" Style="{StaticResource ColorBtn}"
+                                     Tag="#FFFFFF" Checked="Color_Checked"/>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="线宽" Style="{StaticResource SubLabel}"/>
+                        <RadioButton x:Name="ThinWidth" GroupName="Width" Style="{StaticResource SubTextBtn}"
+                                     Content="细" CommandParameter="1.5" Checked="Width_Checked"/>
+                        <RadioButton x:Name="MidWidth" GroupName="Width" Style="{StaticResource SubTextBtn}"
+                                     Content="中" CommandParameter="2.5" IsChecked="True" Checked="Width_Checked"/>
+                        <RadioButton x:Name="ThickWidth" GroupName="Width" Style="{StaticResource SubTextBtn}"
+                                     Content="粗" CommandParameter="4" Checked="Width_Checked"/>
+                        <TextBlock Text="工具" Style="{StaticResource SubLabel}" Margin="14,0,8,0"/>
+                        <TextBlock x:Name="CurrentToolText" Text="矩形" Foreground="#34C759"
+                                   FontSize="12" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </StackPanel>
+            </Border>
+
+            <!-- ══ 主工具条：居中黑色胶囊，17 键 ══ -->
+            <Border x:Name="CapBar"
+                    Grid.Row="1"
+                    HorizontalAlignment="Center"
+                    Margin="0,10,0,2"
+                    Background="#F21E1E1E"
+                    BorderBrush="#33FFFFFF"
+                    BorderThickness="1"
+                    CornerRadius="10"
+                    Padding="6,5"
+                    MouseLeftButtonDown="CapBar_MouseLeftButtonDown">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+
+                    <!-- 拖拽把手 -->
+                    <Border Width="24" Height="36" Background="Transparent" Cursor="SizeAll">
+                        <Path Data="{StaticResource CapIconGrip}" Fill="#66FFFFFF"
+                              Width="14" Height="20" Stretch="Uniform"
+                              HorizontalAlignment="Center" VerticalAlignment="Center"
+                              IsHitTestVisible="False"/>
+                    </Border>
+
+                    <!-- 1 显示鼠标指针（占位） -->
+                    <Button x:Name="BtnCursor" Style="{StaticResource CapActionBtn}"
+                            Tag="{StaticResource CapIconCursor}"
+                            IsEnabled="False" ToolTip="显示鼠标指针（后续版本）"/>
+                    <!-- 2 矩形 -->
+                    <RadioButton x:Name="ToolRect" GroupName="Tool" Style="{StaticResource CapToolBtn}"
+                                 Tag="{StaticResource CapIconRect}" CommandParameter="Rect"
+                                 IsChecked="True" Checked="Tool_Checked" ToolTip="矩形"/>
+                    <!-- 3 箭头 -->
+                    <RadioButton x:Name="ToolArrow" GroupName="Tool" Style="{StaticResource CapToolBtn}"
+                                 Tag="{StaticResource CapIconArrow}" CommandParameter="Arrow"
+                                 Checked="Tool_Checked" ToolTip="箭头"/>
+                    <!-- 4 画笔 -->
+                    <RadioButton x:Name="ToolPen" GroupName="Tool" Style="{StaticResource CapToolBtn}"
+                                 Tag="{StaticResource CapIconPen}" CommandParameter="Pen"
+                                 Checked="Tool_Checked" ToolTip="画笔"/>
+                    <!-- 5 文字：拖框 → 就地输入 → 确定 -->
+                    <RadioButton x:Name="ToolText" GroupName="Tool" Style="{StaticResource CapToolBtn}"
+                                 Tag="{StaticResource CapIconText}" CommandParameter="Text"
+                                 Checked="Tool_Checked" ToolTip="文字标注：拖出文本框后输入"/>
+                    <!-- 6 序号：点一下放一个自增圆徽标，可连续点 -->
+                    <RadioButton x:Name="ToolNumber" GroupName="Tool" Style="{StaticResource CapToolBtn}"
+                                 Tag="{StaticResource CapIconNumber}" CommandParameter="Number"
+                                 Checked="Tool_Checked" ToolTip="序号标注：点一下放一个，自动编号"/>
+                    <!-- 7 马赛克 -->
+                    <RadioButton x:Name="ToolMosaic" GroupName="Tool" Style="{StaticResource CapToolBtn}"
+                                 Tag="{StaticResource CapIconMosaic}" CommandParameter="Mosaic"
+                                 Checked="Tool_Checked" ToolTip="马赛克"/>
+                    <!-- 8 橡皮擦 -->
+                    <RadioButton x:Name="ToolEraser" GroupName="Tool" Style="{StaticResource CapToolBtn}"
+                                 Tag="{StaticResource CapIconEraser}" CommandParameter="Eraser"
+                                 Checked="Tool_Checked" ToolTip="橡皮擦"/>
+
+                    <Border Style="{StaticResource CapSep}"/>
+
+                    <!-- 9 撤销 -->
+                    <Button x:Name="BtnUndo" Style="{StaticResource CapActionBtn}"
+                            Tag="{StaticResource CapIconUndo}"
+                            IsEnabled="False" Click="UndoBtn_Click" ToolTip="撤销 (Ctrl+Z)"/>
+                    <!-- 10 更多 -->
+                    <Button x:Name="BtnMore" Style="{StaticResource CapActionBtn}"
+                            Tag="{StaticResource CapIconMore}"
+                            Click="BtnMore_Click" ToolTip="更多：颜色 / 线宽 / 椭圆 / 重做"/>
+
+                    <Border Style="{StaticResource CapSep}"/>
+
+                    <!-- 11 钉图 -->
+                    <Button x:Name="BtnPin" Style="{StaticResource CapActionBtn}"
+                            Tag="{StaticResource CapIconPin}"
+                            Click="PinBtn_Click" ToolTip="钉到桌面"/>
+                    <!-- 12 OCR：对「底图 + 已有标注」合成图做离线识别，结果弹现有 ResultWindow -->
+                    <Button x:Name="BtnOcr" Style="{StaticResource CapActionBtn}"
+                            Tag="{StaticResource CapIconOcr}"
+                            Click="OcrBtn_Click" ToolTip="OCR 识别当前编辑结果"/>
+                    <!-- 13 翻译：先 OCR 再走 ITranslator，同样弹 ResultWindow -->
+                    <Button x:Name="BtnTranslate" Style="{StaticResource CapActionBtn}"
+                            Tag="{StaticResource CapIconTranslate}"
+                            Click="TranslateBtn_Click" ToolTip="翻译当前编辑结果（先 OCR）"/>
+                    <!-- 14 长截图（占位） -->
+                    <Button x:Name="BtnLong" Style="{StaticResource CapActionBtn}"
+                            Tag="{StaticResource CapIconLong}"
+                            IsEnabled="False" ToolTip="长截图（后续版本）"/>
+                    <!-- 15 另存为 -->
+                    <Button x:Name="BtnSave" Style="{StaticResource CapActionBtn}"
+                            Tag="{StaticResource CapIconSave}"
+                            Click="SaveBtn_Click" ToolTip="另存为 PNG"/>
+                    <!-- 16 取消 -->
+                    <Button x:Name="BtnClose" Style="{StaticResource CapActionBtn}"
+                            Tag="{StaticResource CapIconClose}"
+                            Click="CloseBtn_Click" ToolTip="取消 (Esc)"/>
+                    <!-- 17 完成 -->
+                    <Button x:Name="BtnConfirm" Style="{StaticResource CapActionBtn}"
+                            Tag="{StaticResource CapIconCheck}"
+                            Foreground="#34C759"
+                            Click="CopyBtn_Click" ToolTip="完成：复制到剪贴板"/>
+                </StackPanel>
+            </Border>
+
+            <!-- ══ 底部状态：只留一行紧贴文字的小标签，不再铺满整行的深色状态条 ══ -->
             <Border Grid.Row="2"
-                    BorderBrush="#1FFFFFFF"
-                    BorderThickness="0,1,0,0"
-                    Padding="12,5">
+                    Background="Transparent"
+                    HorizontalAlignment="Left"
+                    Margin="4,2,0,2">
                 <TextBlock x:Name="StatusText"
                            Text="已复制到剪贴板"
-                           Foreground="#7A7A7A"
-                           FontSize="11.5"
+                           Foreground="#C0C0C0"
+                           Background="#991E1E1E"
+                           Padding="6,2"
+                           FontSize="11"
                            TextTrimming="CharacterEllipsis"/>
             </Border>
         </Grid>

@@ -72,9 +72,42 @@ namespace WinKit
         public CaptureModule? CaptureModule => _captureModule;
         public Rack.RackModule? RackModule => _rackModule;
 
+        /// <summary>
+        /// UI 线程未处理异常的全局兜底。
+        /// 旧版没有任何异常处理：编辑器里一个 ArgumentException 就会让整个托盘进程
+        /// 静默退出（表现为「一编辑就闪退」），只能靠翻 Windows 事件日志排查。
+        /// 现在先落盘 crash.log、再弹一次提示，并保持进程存活。
+        /// </summary>
+        private void OnDispatcherUnhandledException(object sender,
+            System.Windows.Threading.DispatcherUnhandledExceptionEventArgs e)
+        {
+            try
+            {
+                var log = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "crash.log");
+                File.AppendAllText(log,
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {e.Exception}{Environment.NewLine}" +
+                    new string('-', 60) + Environment.NewLine);
+            }
+            catch { /* 日志写失败不影响提示，也绝不能在这里再抛 */ }
+
+            try
+            {
+                System.Windows.MessageBox.Show(
+                    $"WinKit 遇到未处理的异常，已记录到程序目录下的 crash.log：{Environment.NewLine}{Environment.NewLine}" +
+                    $"{e.Exception.GetType().Name}: {e.Exception.Message}",
+                    "WinKit 异常", MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+            catch { }
+
+            e.Handled = true;
+        }
+
         protected override void OnStartup(StartupEventArgs e)
         {
             base.OnStartup(e);
+
+            // 兜底：任何未捕获的 UI 线程异常都不再静默闪退（先记日志、再提示、进程保活）
+            DispatcherUnhandledException += OnDispatcherUnhandledException;
 
             // 0. 单实例保护：同一会话内只允许一个 WinKit 进程常驻。
             //    否则双击/重复启动会跑出多个托盘图标 + 多份 ~300MB 的 OCR 引擎。

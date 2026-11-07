@@ -14,7 +14,11 @@ namespace WinKit.Capture.Annotations
     /// </summary>
     public sealed class AnnotationController
     {
-        public enum ToolKind { Rect, Arrow, Pen, Mosaic, Ellipse, Eraser }
+        public enum ToolKind
+        {
+            Rect, Arrow, Pen, Mosaic, Ellipse, Eraser, Text,
+            Number, Line, Highlight,
+        }
 
         private readonly Canvas _canvas;
         private readonly Stack<IUndoCommand> _undoStack = new();
@@ -79,6 +83,11 @@ namespace WinKit.Capture.Annotations
                 ToolKind.Arrow => new ArrowAnnotation(_color, _thickness),
                 ToolKind.Pen => new PenAnnotation(_color, _thickness),
                 ToolKind.Ellipse => new EllipseAnnotation(_color, _thickness),
+                ToolKind.Text => new TextAnnotation(_color, _thickness),
+                ToolKind.Line => new LineAnnotation(_color, _thickness),
+                // Mosaic 需要底图、Number 需要点击位置、Highlight 需要画布尺寸，
+                // 三者都由 EditorWindow.CreateAnnotation 单独构造（与 Mosaic 同套路），
+                // 不会走到工厂这里。
                 _ => new RectAnnotation(_color, _thickness),
             };
         }
@@ -86,7 +95,19 @@ namespace WinKit.Capture.Annotations
         /// <summary>把提交后的标注元素挂到画布，并记一条「新增」撤销命令。</summary>
         public void AddCommitted(IAnnotation annotation)
         {
-            _canvas.Children.Add(annotation.Visual);
+            var visual = annotation.Visual;
+            if (visual == null) return;
+
+            // 预览元素在 Canvas_MouseLeftButtonDown 里就已经挂进画布了：
+            // Rect / Arrow / Pen / Ellipse 的 Visual 与 CreatePreview 返回的是同一个实例；
+            // 马赛克宿主也会在 BuildMosaic 之后自行 Add。只有文字标注这类
+            // 「松手后重建 Visual」的才需要在这里挂。
+            // 重复 Add 会抛 ArgumentException（Visual 已有父级），未捕获时直接击穿
+            // UI 线程导致整个进程闪退 —— 这是「一画标注就闪退」的根因。
+            if (!_canvas.Children.Contains(visual))
+            {
+                _canvas.Children.Add(visual);
+            }
             PushUndo(new AddCommand(_canvas, annotation));
         }
 

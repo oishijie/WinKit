@@ -23,6 +23,12 @@ namespace WinKit.Rack
         private readonly ClipboardManager? _clipboardManager;
         private RackWindow? _window;
         private bool _disposed;
+        /// <summary>首次打开时才从数据源装载一次，避免每次 Toggle 都 Clear + 重复挂一遍。</summary>
+        private bool _loaded;
+
+        /// <summary>晾衣架是否处于展开状态（托盘菜单据此显示「收起 / 展开」）。
+        /// 不能用 Window.IsVisible：自动收起后窗口仍以 8px 热区存在，那时对外也算「已收起」。</summary>
+        public bool IsActive => _window?.IsExpanded == true;
 
         public RackModule(SettingsManager settingsManager, ClipboardManager? clipboardManager = null)
         {
@@ -30,44 +36,59 @@ namespace WinKit.Rack
             _clipboardManager = clipboardManager;
         }
 
-        /// <summary>显示 / 隐藏晾衣架。</summary>
+        /// <summary>显示 / 隐藏晾衣架。首次显示时把未完成待办与最近剪贴板记录挂上去。</summary>
         public void Toggle()
         {
             EnsureWindow();
-            if (_window!.IsVisible) _window.Hide();
-            else _window.Show();
+            if (_window!.IsExpanded)
+            {
+                _window.Dismiss();
+                return;
+            }
+
+            // LoadFromSources 全项目此前没有任何调用点：托盘点开只 Show 了一个 8px 透明空窗口，
+            // 视觉上「什么都没发生」。这里补上装载，且只装一次（它会 Clear 掉用户手动挂的内容）。
+            if (!_loaded)
+            {
+                _loaded = true;
+                LoadFromSources();
+            }
+            _window.Reveal();
         }
 
         /// <summary>挂一张图片（截图 / 贴图）到绳子上。</summary>
         public void HangImage(BitmapSource image)
         {
             if (image == null) return;
-            EnsureWindow();
-            _window!.Hang(RackItem.ImageItem(image));
-            _window.Show();
+            HangCore(RackItem.ImageItem(image));
         }
 
         /// <summary>挂一段文本到绳子上。</summary>
         public void HangText(string text)
         {
             if (string.IsNullOrEmpty(text)) return;
-            EnsureWindow();
-            _window!.Hang(RackItem.TextItem(text));
-            _window.Show();
+            HangCore(RackItem.TextItem(text));
         }
 
         /// <summary>挂一条待办到绳子上。</summary>
         public void HangTodo(string title, bool isDone)
         {
             if (string.IsNullOrEmpty(title)) return;
+            HangCore(RackItem.TodoItem(title, isDone));
+        }
+
+        /// <summary>手动挂载的统一入口：挂完立刻展开显示，卡片不会再被自动收起带走。</summary>
+        private void HangCore(RackItem item)
+        {
             EnsureWindow();
-            _window!.Hang(RackItem.TodoItem(title, isDone));
-            _window.Show();
+            _loaded = true;   // 用户手动挂过内容，后续 Toggle 不再用 LoadFromSources 清空
+            _window!.Hang(item);
+            _window.Reveal();
         }
 
         /// <summary>
         /// 从数据源批量加载内容挂到绳子上：待办（未完成）+ 剪贴板历史（文本 + 图片，各取最近若干条）。
-        /// 由 App 启动时或用户手动触发调用。
+        /// 由托盘菜单首次打开晾衣架时调用（RackModule.Toggle），只装一次。
         /// </summary>
         public void LoadFromSources(int maxClipboardItems = 5)
         {

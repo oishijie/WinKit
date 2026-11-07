@@ -12,7 +12,7 @@ namespace WinKit.Capture.Annotations
     /// </summary>
     public sealed class EllipseAnnotation : IAnnotation
     {
-        private const double FillAlpha = 0x22;
+        private const byte FillAlpha = 0x22;
 
         private Ellipse? _element;
         private Color _color;

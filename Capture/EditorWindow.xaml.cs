@@ -3,10 +3,12 @@ using System.Collections.Generic;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using SWF = System.Windows.Forms;
 using WPoint = System.Windows.Point;
 using WinKit.Capture.Annotations;
@@ -47,6 +49,19 @@ namespace WinKit.Capture
         private bool _erasing;
         private readonly List<WPoint> _eraseTrack = new();
 
+        // 序号标注自增计数器：只增不减，删除 / 撤销都不重排已有编号
+        private int _numberCounter;
+
+        // 文字标注的就地编辑态：这些元素都只在编辑期间挂在 OverlayCanvas 上，
+        // 提交/取消时立刻移除，因此 ComposeImage 永远截不到光标与样式条。
+        private bool _textEditing;
+        private TextAnnotation? _textEditingAnno;
+        private Grid? _textEditHost;
+        private TextBox? _textEditor;
+        private Color _textColor = Color.FromRgb(0xFF, 0x3B, 0x30);
+        private double _textFontSize = 20;
+        private Rect _textRect;
+
         // 缩放 / 旋转状态
         private bool _resizing;
         private int _resizeHandle;
@@ -72,6 +87,8 @@ namespace WinKit.Capture
             BaseImage.Source = _image;
             Opacity = 0;   // 尺寸与位置要在 Loaded 里算完，先藏起来免得闪出一个空壳窗口
             Loaded += OnLoaded;
+            // 从 OCR / 翻译结果窗切回来时恢复置顶（弹出结果窗前会临时降一层）
+            Activated += (s, e) => Topmost = true;
         }
 
         private void OnLoaded(object sender, RoutedEventArgs e)
@@ -140,17 +157,62 @@ namespace WinKit.Capture
         //  工具栏
         // ══════════════════════════════════════════════
 
-        private void ToolBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        /// <summary>工具名 → 子工具条里的中文提示</summary>
+        private static readonly Dictionary<string, string> ToolLabels = new()
         {
-            if (e.ClickCount == 1) DragMove();
+            ["Rect"] = "矩形",
+            ["Ellipse"] = "椭圆",
+            ["Arrow"] = "箭头",
+            ["Pen"] = "画笔",
+            ["Mosaic"] = "马赛克",
+            ["Eraser"] = "橡皮擦",
+            ["Text"] = "文字",
+            ["Number"] = "序号",
+            ["Line"] = "直线",
+            ["Highlight"] = "聚焦",
+        };
+
+        private void CapBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.ClickCount != 1) return;
+            // 点在图标按钮上不能拖：DragMove 会进入模态移动循环并吞掉 Click。
+            // 只有把手和胶囊空白处才允许拖动窗口。
+            if (IsInsideButton(e.OriginalSource as DependencyObject)) return;
+            DragMove();
+        }
+
+        private static bool IsInsideButton(DependencyObject? source)
+        {
+            var d = source;
+            while (d != null)
+            {
+                if (d is ButtonBase) return true;
+                d = VisualTreeHelper.GetParent(d);
+            }
+            return false;
+        }
+
+        private void BtnMore_Click(object sender, RoutedEventArgs e)
+        {
+            SubToolBar.Visibility = SubToolBar.Visibility == Visibility.Visible
+                ? Visibility.Collapsed
+                : Visibility.Visible;
         }
 
         private void Tool_Checked(object sender, RoutedEventArgs e)
         {
-            if (sender is RadioButton rb && rb.Tag is string tag
+            // 换工具前先把正在编辑的文字收掉，避免遗留一个悬挂的输入框
+            if (_textEditing) FinishTextEdit(true);
+
+            // Tag 已被 StreamGeometry 占用，工具名改放 CommandParameter
+            if (sender is RadioButton rb && rb.CommandParameter is string tag
                 && Enum.TryParse<AnnotationController.ToolKind>(tag, out var kind))
             {
                 _tool = kind;
+                if (CurrentToolText != null)
+                {
+                    CurrentToolText.Text = ToolLabels.TryGetValue(tag, out var label) ? label : tag;
+                }
             }
         }
 
@@ -170,7 +232,7 @@ namespace WinKit.Capture
         private void Width_Checked(object sender, RoutedEventArgs e)
         {
             if (_controller == null) return;
-            if (sender is RadioButton rb && rb.Tag is string w
+            if (sender is RadioButton rb && rb.CommandParameter is string w
                 && double.TryParse(w, out var thickness))
             {
                 _controller.Thickness = thickness;
@@ -240,8 +302,71 @@ namespace WinKit.Capture
 
         private void CloseBtn_Click(object sender, RoutedEventArgs e) => Close();
 
+        // ══════════════════════════════════════════════
+        //  OCR / 翻译：复用主实例的引擎与结果窗
+        // ══════════════════════════════════════════════
+
+        private void OcrBtn_Click(object sender, RoutedEventArgs e) => RunEditorOcr(false);
+        private void TranslateBtn_Click(object sender, RoutedEventArgs e) => RunEditorOcr(true);
+
+        /// <summary>
+        /// 把「底图 + 已有标注」合成图交给翻译模块做 OCR / 翻译。
+        /// 链路完全跑在主实例上：不新建第二个 200~300MB 的 OCR 引擎，
+        /// 也不新造结果界面（ResultWindow 的复制 / 翻译 / 搜索 / 钉图全部白拿）。
+        /// 编辑器本身保持打开。
+        /// </summary>
+        private async void RunEditorOcr(bool translate)
+        {
+            var app = (App)Application.Current;
+            var module = app.TranslateModule;
+            if (module == null)
+            {
+                SetStatus("翻译模块未就绪");
+                return;
+            }
+            if (translate && !module.IsTranslatorConfigured)
+            {
+                SetStatus("未配置翻译 API Key：设置中心 → 翻译与 OCR");
+                return;
+            }
+
+            try
+            {
+                // ComposeImage 会顺带收尾文字编辑、去掉选中态，
+                // 所以识别输入里不会混入虚线框、控制点或光标。
+                var image = ComposeImage();
+
+                // 结果窗与编辑器同为 Topmost；临时让编辑器退一层，
+                // 保证 ShowAtMouse() + Activate() 能稳定把结果窗盖上来。
+                // 用户点回编辑器时由构造函数里的 Activated 订阅恢复置顶。
+                Topmost = false;
+                SetStatus(translate ? "正在识别并翻译…" : "正在识别文字…");
+
+                if (translate) await module.TranslateEditorImageAsync(image);
+                else await module.RecognizeEditorImageAsync(image);
+
+                SetStatus("识别完成，结果窗已弹出");
+            }
+            catch (Exception ex)
+            {
+                SetStatus($"识别失败：{ex.Message}");
+            }
+        }
+
         private void Window_KeyDown(object sender, KeyEventArgs e)
         {
+            // 文字就地编辑期间把键盘让给输入框：
+            // Esc 取消编辑，Delete / Ctrl+Z / Ctrl+Y 由 TextBox 自己处理，窗口快捷键一律不抢。
+            if (_textEditing)
+            {
+                if (e.Key == Key.Escape)
+                {
+                    CancelTextEdit();
+                    e.Handled = true;
+                }
+                return;
+            }
+
             var ctrl = (Keyboard.Modifiers & ModifierKeys.Control) == ModifierKeys.Control;
 
             if (e.Key == Key.Escape)
@@ -283,7 +408,30 @@ namespace WinKit.Capture
             if (e.ChangedButton != MouseButton.Left) return;
             if (_controller == null) return;
 
+            // 编辑期间：点在输入框 / 样式条内不打扰；点画布其它位置视为「提交并收尾」。
+            // 这次点击只用于收尾，不再顺手画一个新标注。
+            if (_textEditing)
+            {
+                var src = e.OriginalSource as DependencyObject;
+                if (_textEditHost != null && IsDescendantOf(src, _textEditHost)) return;
+                if (IsDescendantOf(src, TextStyleBar)) return;
+                FinishTextEdit(true);
+                return;
+            }
+
             var p = e.GetPosition(OverlayCanvas);
+
+            // ── 序号工具：点一下即放置，不走「预览 → 拖拽 → 提交」链路 ──
+            // 这样连点可以连续放 1 / 2 / 3，也不会出现徽标先在 (0,0) 闪一帧。
+            if (_tool == AnnotationController.ToolKind.Number)
+            {
+                _controller.Deselect();
+                var num = new NumberAnnotation(++_numberCounter, _controller.Color, p);
+                _controller.AddCommitted(num);
+                UpdateUndoRedoState();
+                e.Handled = true;
+                return;
+            }
 
             // ── 橡皮擦工具：拖动擦除 ──
             if (_tool == AnnotationController.ToolKind.Eraser)
@@ -421,12 +569,19 @@ namespace WinKit.Capture
                 return new MosaicAnnotation(_image, _scaleX, _scaleY,
                     _controller!.Color, _controller.Thickness);
             }
+            if (tool == AnnotationController.ToolKind.Highlight)
+            {
+                // 遮罩要覆盖整张画布，构造时就得知道画布的逻辑尺寸（OnLoaded 里已设好）
+                return new HighlightAnnotation(OverlayCanvas.Width, OverlayCanvas.Height,
+                    _controller!.Color, _controller.Thickness);
+            }
             return _controller!.CreateAnnotation(tool);
         }
 
         private void Canvas_MouseMove(object sender, MouseEventArgs e)
         {
             if (_controller == null) return;
+            if (_textEditing) return;
             var p = e.GetPosition(OverlayCanvas);
 
             // 橡皮擦拖动：收集轨迹点
@@ -489,6 +644,7 @@ namespace WinKit.Capture
 
         private void Canvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
+            if (_textEditing) return;
             if (_controller == null) return;
             OverlayCanvas.ReleaseMouseCapture();
 
@@ -548,6 +704,24 @@ namespace WinKit.Capture
                 _activeAnnotation.Update(_activePreview, _dragStartPoint, end);
             }
 
+            // 文字特殊处理：虚线框换成就地输入框，用户确定后才 AddCommitted。
+            // 与马赛克同属「松手后由宿主接管」的两阶段标注。
+            if (_activeAnnotation is TextAnnotation textAnno)
+            {
+                var rect = textAnno.DraftBounds;
+                bool valid = rect.Width >= TextAnnotation.MinWidth &&
+                             rect.Height >= TextAnnotation.MinHeight;
+
+                OverlayCanvas.Children.Remove(_activePreview);
+                _activePreview = null;
+                _activeAnnotation = null;
+
+                if (valid) BeginTextEdit(textAnno, rect);
+                UpdateUndoRedoState();
+                e.Handled = true;
+                return;
+            }
+
             // 马赛克特殊处理：先移除虚线框，再生成真正的马赛克贴片
             if (_activeAnnotation is MosaicAnnotation mosaic)
             {
@@ -596,8 +770,220 @@ namespace WinKit.Capture
         private void UpdateUndoRedoState()
         {
             if (_controller == null) return;
-            UndoBtn.IsEnabled = _controller.CanUndo;
-            RedoBtn.IsEnabled = _controller.CanRedo;
+            BtnUndo.IsEnabled = _controller.CanUndo;
+            BtnRedo.IsEnabled = _controller.CanRedo;
+        }
+
+        // ══════════════════════════════════════════════
+        //  文字标注：拖框 → 就地输入 → 提交
+        // ══════════════════════════════════════════════
+
+        private const double TextFontSizeMin = 10;
+        private const double TextFontSizeMax = 72;
+        private const double TextFontSizeStep = 2;
+
+        /// <summary>把刚拖好的虚线框换成输入框，并把样式条浮到框上方。</summary>
+        private void BeginTextEdit(TextAnnotation anno, Rect rect)
+        {
+            _textEditing = true;                 // 先立闸，避免后续事件重入
+            _textEditingAnno = anno;
+            _textRect = rect;
+            _textFontSize = 20;
+            _textColor = DefaultColor;
+
+            TextColorRed.IsChecked = true;       // 同步样式条到默认红
+            UpdateTextStyleUi();
+
+            var frame = new Rectangle
+            {
+                Stroke = new SolidColorBrush(Color.FromRgb(0x34, 0xC7, 0x59)),
+                StrokeThickness = 1,
+                StrokeDashArray = new DoubleCollection { 4, 3 },
+                IsHitTestVisible = false,
+            };
+
+            _textEditor = new TextBox
+            {
+                Width = rect.Width,
+                Height = rect.Height,
+                FontSize = _textFontSize,
+                Foreground = new SolidColorBrush(_textColor),
+                Background = new SolidColorBrush(Color.FromArgb(0x30, 0, 0, 0)),
+                BorderThickness = new Thickness(0),
+                Padding = new Thickness(3, 1, 3, 1),
+                TextWrapping = TextWrapping.Wrap,
+                AcceptsReturn = false,
+                AcceptsTab = false,
+                VerticalScrollBarVisibility = ScrollBarVisibility.Disabled,
+                HorizontalScrollBarVisibility = ScrollBarVisibility.Disabled,
+            };
+            _textEditor.SpellCheck.IsEnabled = false;
+            _textEditor.PreviewKeyDown += TextEditor_PreviewKeyDown;
+            _textEditor.LostKeyboardFocus += TextEditor_LostKeyboardFocus;
+
+            _textEditHost = new Grid
+            {
+                Width = rect.Width,
+                Height = rect.Height,
+                IsHitTestVisible = true,
+            };
+            _textEditHost.Children.Add(frame);
+            _textEditHost.Children.Add(_textEditor);
+            Canvas.SetLeft(_textEditHost, rect.X);
+            Canvas.SetTop(_textEditHost, rect.Y);
+            OverlayCanvas.Children.Add(_textEditHost);
+
+            // 先可见再 Measure（Collapsed 元素测量恒为 0），然后摆到框上方；放不下就落下方
+            TextStyleBar.Visibility = Visibility.Visible;
+            TextStyleBar.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            double barW = TextStyleBar.DesiredSize.Width;
+            double barH = TextStyleBar.DesiredSize.Height;
+            double barX = Math.Max(0, Math.Min(rect.X, OverlayCanvas.Width - barW));
+            double barY = rect.Y - barH - 6;
+            if (barY < 0) barY = rect.Y + rect.Height + 6;
+            Canvas.SetLeft(TextStyleBar, barX);
+            Canvas.SetTop(TextStyleBar, barY);
+
+            SetStatus("文字标注：Enter 确定 · Esc 取消 · 点击别处提交");
+
+            // 焦点要等元素真正进入可视树之后再给
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (!_textEditing || _textEditor == null) return;
+                _textEditor.Focus();
+                Keyboard.Focus(_textEditor);
+                _textEditor.CaretIndex = _textEditor.Text.Length;
+            }), DispatcherPriority.Input);
+        }
+
+        /// <summary>
+        /// 结束编辑。commit=false 或文本为空时直接丢弃，不进撤销栈；
+        /// commit=true 且非空时把输入框换成 TextBlock 渲染，再登记一条「新增」撤销命令。
+        /// </summary>
+        private void FinishTextEdit(bool commit)
+        {
+            if (!_textEditing) return;
+            _textEditing = false;                // 先关闸，避免移除元素触发的 LostFocus 重入
+
+            string text = _textEditor?.Text?.Trim() ?? string.Empty;
+            var anno = _textEditingAnno;
+            DetachTextEditor();
+
+            if (commit && anno != null && text.Length > 0)
+            {
+                anno.SetContent(text, _textColor, _textFontSize, _textRect);
+                _controller?.AddCommitted(anno);
+                // 提交后自动选中，直接露出虚线外框与 8 个控制点
+                _controller?.TrySelect(new WPoint(_textRect.X + 2, _textRect.Y + 2));
+                SetStatus("已添加文字标注");
+            }
+            else
+            {
+                SetStatus(commit ? "文字为空，已丢弃" : "已取消文字标注");
+            }
+
+            _textEditingAnno = null;
+            UpdateUndoRedoState();
+        }
+
+        private void CancelTextEdit() => FinishTextEdit(false);
+
+        /// <summary>移除输入框与样式条，解绑事件；调用后画布上只剩已提交的标注。</summary>
+        private void DetachTextEditor()
+        {
+            TextStyleBar.Visibility = Visibility.Collapsed;
+
+            if (_textEditor != null)
+            {
+                _textEditor.PreviewKeyDown -= TextEditor_PreviewKeyDown;
+                _textEditor.LostKeyboardFocus -= TextEditor_LostKeyboardFocus;
+                _textEditor = null;
+            }
+            if (_textEditHost != null)
+            {
+                OverlayCanvas.Children.Remove(_textEditHost);
+                _textEditHost.Children.Clear();
+                _textEditHost = null;
+            }
+        }
+
+        private void TextColor_Checked(object sender, RoutedEventArgs e)
+        {
+            if (!_textEditing) return;
+            if (sender is RadioButton rb && rb.Tag is string hex)
+            {
+                try
+                {
+                    _textColor = (Color)ColorConverter.ConvertFromString(hex);
+                    if (_textEditor != null) _textEditor.Foreground = new SolidColorBrush(_textColor);
+                }
+                catch { /* 无效色值忽略 */ }
+            }
+        }
+
+        private void TextSizeDown_Click(object sender, RoutedEventArgs e) => ChangeTextFontSize(-TextFontSizeStep);
+        private void TextSizeUp_Click(object sender, RoutedEventArgs e) => ChangeTextFontSize(TextFontSizeStep);
+
+        private void ChangeTextFontSize(double delta)
+        {
+            if (!_textEditing) return;
+            double v = Math.Max(TextFontSizeMin, Math.Min(TextFontSizeMax, _textFontSize + delta));
+            if (Math.Abs(v - _textFontSize) < 1e-6) return;
+            _textFontSize = v;
+            if (_textEditor != null) _textEditor.FontSize = v;
+            UpdateTextStyleUi();
+        }
+
+        private void UpdateTextStyleUi()
+        {
+            TextSizeLabel.Text = ((int)_textFontSize).ToString();
+            BtnTextSizeDown.IsEnabled = _textFontSize > TextFontSizeMin;
+            BtnTextSizeUp.IsEnabled = _textFontSize < TextFontSizeMax;
+        }
+
+        private void TextOk_Click(object sender, RoutedEventArgs e) => FinishTextEdit(true);
+        private void TextCancel_Click(object sender, RoutedEventArgs e) => CancelTextEdit();
+
+        private void TextEditor_PreviewKeyDown(object sender, KeyEventArgs e)
+        {
+            if (e.Key == Key.Enter)
+            {
+                FinishTextEdit(true);
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Escape)
+            {
+                CancelTextEdit();
+                e.Handled = true;
+            }
+        }
+
+        /// <summary>
+        /// 焦点离开输入框即提交，但点样式条按钮时必须放行，
+        /// 否则颜色 / 字号还没点下去编辑就被收掉了。
+        /// </summary>
+        private void TextEditor_LostKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e)
+        {
+            if (!_textEditing) return;
+            if (TextStyleBar.IsMouseOver) return;
+            if (e.NewFocus is DependencyObject d && IsDescendantOf(d, TextStyleBar)) return;
+
+            // 延迟到本轮输入处理结束，避免抢在工具条按钮 Click 之前收尾
+            Dispatcher.BeginInvoke(new Action(() =>
+            {
+                if (_textEditing && !TextStyleBar.IsMouseOver) FinishTextEdit(true);
+            }), DispatcherPriority.Background);
+        }
+
+        private static bool IsDescendantOf(DependencyObject? child, DependencyObject parent)
+        {
+            var d = child;
+            while (d != null)
+            {
+                if (ReferenceEquals(d, parent)) return true;
+                d = VisualTreeHelper.GetParent(d);
+            }
+            return false;
         }
 
         // ══════════════════════════════════════════════
@@ -609,6 +995,12 @@ namespace WinKit.Capture
         /// </summary>
         private BitmapSource ComposeImage()
         {
+            // 兜底：编辑中途点了「完成 / 钉图 / 挂衣架 / 另存为」也要先收掉输入框与样式条；
+            // 顺带去掉选中态，避免虚线框与 8 个控制点被截进导出图片。
+            // 下面的 RenderTargetBitmap 渲染逻辑本身一行未改。
+            if (_textEditing) FinishTextEdit(true);
+            _controller?.Deselect();
+
             var dpi = VisualTreeHelper.GetDpi(ImageHost);
             int pw = (int)Math.Round(ImageHost.ActualWidth * dpi.DpiScaleX);
             int ph = (int)Math.Round(ImageHost.ActualHeight * dpi.DpiScaleY);

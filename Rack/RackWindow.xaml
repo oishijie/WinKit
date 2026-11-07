@@ -1,10 +1,11 @@
+<!-- Background 恒为 null：透明区域点击穿透到下层窗口。顶部热区靠 Win32 坐标轮询判定，不依赖 WPF 命中测试 -->
 <Window x:Class="WinKit.Rack.RackWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="晾衣架"
         WindowStyle="None"
         AllowsTransparency="True"
-        Background="Transparent"
+        Background="{x:Null}"
         ShowInTaskbar="False"
         Topmost="True"
         ResizeMode="NoResize"
@@ -20,6 +21,7 @@
     <Grid x:Name="Root">
         <!-- 绳子：三次贝塞尔曲线，中间下垂 -->
         <Path x:Name="RopePath"
+              IsHitTestVisible="False"
               Stroke="#B8865B"
               StrokeThickness="2.5"
               StrokeStartLineCap="Round"
@@ -27,5 +29,21 @@
 
         <!-- 卡片容器 -->
         <Canvas x:Name="CardCanvas"/>
+
+        <!-- 空态提示：刚打开时一张卡片都没有，也要给用户一个「已经打开」的明确反馈 -->
+        <Border x:Name="EmptyHint"
+                Background="#E62B2B2B"
+                BorderBrush="#4DFFFFFF"
+                BorderThickness="1"
+                CornerRadius="8"
+                Padding="12,7"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,56,0,0"
+                IsHitTestVisible="False">
+            <TextBlock Text="晾衣架是空的 · 复制文字或在截图编辑器点「挂衣架」"
+                       Foreground="#E0E0E0"
+                       FontSize="12"/>
+        </Border>
     </Grid>
 </Window>

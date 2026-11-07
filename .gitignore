@@ -33,3 +33,12 @@ $RECYCLE.BIN/
 
 # 打包产物
 /dist/
+
+## ── 本地参考项目（第三方源码副本，非本仓库代码，许可不同） ──
+/ScreenCapture-main/
+/SnowAir-main/
+
+## ── 本机工具与运行时残留 ──
+/.workbuddy/
+crash.log
+*.locked

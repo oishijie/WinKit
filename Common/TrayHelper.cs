@@ -265,6 +265,7 @@ namespace WinKit.Common
         private void SyncMenuStates()
         {
             _itemTodoSwitch.Header = _todoWindow.IsVisible ? "隐藏待办" : "显示待办";
+            _itemRack.Header = (_app as App)?.RackModule?.IsActive == true ? "收起晾衣架" : "晾衣架";
             _itemPaste.IsEnabled = _settingsManager.Settings.PasteEnableMonitoring;
             _itemSync.IsChecked = _settingsManager.Settings.SyncEnabled;
         }

@@ -15,7 +15,7 @@ namespace WinKit.Capture.Annotations
     /// </summary>
     public sealed class RectAnnotation : IAnnotation
     {
-        private const double FillAlpha = 0x22;
+        private const byte FillAlpha = 0x22;
 
         private Rectangle? _element;
         private Color _color;

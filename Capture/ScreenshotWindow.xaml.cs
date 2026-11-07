@@ -32,6 +32,8 @@ namespace WinKit.Capture
         private WPoint _start;
         private readonly RectangleGeometry _hole = new RectangleGeometry();
         private readonly RectangleGeometry _full = new RectangleGeometry();
+        /// <summary>选区 8 个夹点，顺序：左上 / 上中 / 右上 / 右中 / 右下 / 下中 / 左下 / 左中</summary>
+        private readonly FrameworkElement[] _handles;
         /// <summary>截底图前隐藏的应用窗口，选区完成后恢复</summary>
         private readonly System.Collections.Generic.List<Window> _hiddenWindows = new();
         /// <summary>Complete 正在执行标志，防止 Show() 恢复 Topmost 窗口时抢焦点触发 Deactivated → Cancel() 重入崩溃</summary>
@@ -58,6 +60,7 @@ namespace WinKit.Capture
         public ScreenshotWindow()
         {
             InitializeComponent();
+            _handles = new FrameworkElement[] { H0, H1, H2, H3, H4, H5, H6, H7 };
             Opacity = 0; // 捕获底图前保持完全透明
             Loaded += OnLoaded;
             Activated += (s, e) => _activatedOnce = true;
@@ -216,6 +219,7 @@ namespace WinKit.Capture
             _start = e.GetPosition(RootCanvas);
             SelectionBorder.Visibility = Visibility.Visible;
             SizeTip.Visibility = Visibility.Visible;
+            HandleLayer.Visibility = Visibility.Visible;
             RootCanvas.CaptureMouse();
             UpdateSelection(_start);
         }
@@ -256,13 +260,40 @@ namespace WinKit.Capture
             SelectionBorder.Width = rect.Width;
             SelectionBorder.Height = rect.Height;
 
-            SizeText.Text = $"{(int)rect.Width} × {(int)rect.Height}";
+            // 信息条统一报物理像素：与最终落盘 / 剪贴板里的位图尺寸一一对应，
+            // 高 DPI 或负坐标副屏下也不会出现「显示的尺寸 ≠ 实际图片尺寸」。
+            int px = (int)Math.Round(_virtLeftPhys + rect.X * _dpiScaleX);
+            int py = (int)Math.Round(_virtTopPhys + rect.Y * _dpiScaleY);
+            int pw = (int)Math.Round(rect.Width * _dpiScaleX);
+            int ph = (int)Math.Round(rect.Height * _dpiScaleY);
+            SizeText.Text = $"X: {px}   Y: {py}     {pw} × {ph}";
+
             SizeTip.Measure(new WSize(double.PositiveInfinity, double.PositiveInfinity));
             double tipX = rect.X;
-            double tipY = rect.Y - SizeTip.DesiredSize.Height - 4;
-            if (tipY < 0) tipY = rect.Y + 4;
+            double tipY = rect.Y - SizeTip.DesiredSize.Height - 8;
+            if (tipY < 0) tipY = rect.Y + 8;
             Canvas.SetLeft(SizeTip, tipX);
             Canvas.SetTop(SizeTip, tipY);
+
+            UpdateHandles(rect);
+        }
+
+        /// <summary>把 8 个白色方形夹点摆到四角与四边中点（中心对齐，边长 8）</summary>
+        private void UpdateHandles(Rect r)
+        {
+            double x0 = r.Left, x1 = r.Left + r.Width / 2, x2 = r.Right;
+            double y0 = r.Top, y1 = r.Top + r.Height / 2, y2 = r.Bottom;
+            var points = new[]
+            {
+                new WPoint(x0, y0), new WPoint(x1, y0), new WPoint(x2, y0),
+                new WPoint(x2, y1), new WPoint(x2, y2), new WPoint(x1, y2),
+                new WPoint(x0, y2), new WPoint(x0, y1),
+            };
+            for (int i = 0; i < _handles.Length; i++)
+            {
+                Canvas.SetLeft(_handles[i], points[i].X - 4);
+                Canvas.SetTop(_handles[i], points[i].Y - 4);
+            }
         }
 
         private static Rect Normalize(WPoint a, WPoint b)
