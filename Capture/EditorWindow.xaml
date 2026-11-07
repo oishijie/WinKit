@@ -67,6 +67,33 @@
             <Setter Property="Margin" Value="8,0"/>
         </Style>
 
+        <!-- 颜色选择按钮：圆形色块，选中时外围加白圈 -->
+        <Style x:Key="ColorBtn" TargetType="RadioButton">
+            <Setter Property="Width" Value="16"/>
+            <Setter Property="Height" Value="16"/>
+            <Setter Property="Margin" Value="3,0"/>
+            <Setter Property="Cursor" Value="Hand"/>
+            <Setter Property="Focusable" Value="False"/>
+            <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="RadioButton">
+                        <Grid>
+                            <Ellipse x:Name="ring" Stroke="Transparent" StrokeThickness="2"
+                                     Width="16" Height="16"/>
+                            <Ellipse x:Name="dot" Width="12" Height="12"
+                                     Fill="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"/>
+                        </Grid>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="ring" Property="Stroke" Value="#FFFFFFFF"/>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
     </Window.Resources>
 
     <!-- Margin 为投影留扩散空间（同结果窗）。窗口是 SizeToContent，自动外扩 20px，
@@ -98,6 +125,9 @@
                         <RadioButton x:Name="ToolRect" Content="矩形" GroupName="Tool"
                                      Style="{StaticResource ToolBtn}" IsChecked="True"
                                      Checked="Tool_Checked" Tag="Rect"/>
+                        <RadioButton x:Name="ToolEllipse" Content="椭圆" GroupName="Tool"
+                                     Style="{StaticResource ToolBtn}"
+                                     Checked="Tool_Checked" Tag="Ellipse"/>
                         <RadioButton x:Name="ToolArrow" Content="箭头" GroupName="Tool"
                                      Style="{StaticResource ToolBtn}"
                                      Checked="Tool_Checked" Tag="Arrow"/>
@@ -107,6 +137,37 @@
                         <RadioButton x:Name="ToolMosaic" Content="马赛克" GroupName="Tool"
                                      Style="{StaticResource ToolBtn}"
                                      Checked="Tool_Checked" Tag="Mosaic"/>
+                        <RadioButton x:Name="ToolEraser" Content="橡皮擦" GroupName="Tool"
+                                     Style="{StaticResource ToolBtn}"
+                                     Checked="Tool_Checked" Tag="Eraser"/>
+
+                        <Border Style="{StaticResource ToolSep}"/>
+
+                        <!-- 颜色选择：预设五色，互斥选中 -->
+                        <StackPanel x:Name="ColorPanel" Orientation="Horizontal" VerticalAlignment="Center">
+                            <RadioButton x:Name="ColorRed" GroupName="Color" Style="{StaticResource ColorBtn}"
+                                         Tag="#FF3B30" IsChecked="True" Checked="Color_Checked"/>
+                            <RadioButton x:Name="ColorYellow" GroupName="Color" Style="{StaticResource ColorBtn}"
+                                         Tag="#FFD60A" Checked="Color_Checked"/>
+                            <RadioButton x:Name="ColorGreen" GroupName="Color" Style="{StaticResource ColorBtn}"
+                                         Tag="#34C759" Checked="Color_Checked"/>
+                            <RadioButton x:Name="ColorBlue" GroupName="Color" Style="{StaticResource ColorBtn}"
+                                         Tag="#0A84FF" Checked="Color_Checked"/>
+                            <RadioButton x:Name="ColorWhite" GroupName="Color" Style="{StaticResource ColorBtn}"
+                                         Tag="#FFFFFF" Checked="Color_Checked"/>
+                        </StackPanel>
+
+                        <Border Style="{StaticResource ToolSep}"/>
+
+                        <!-- 线宽选择：细 / 中 / 粗 三档 -->
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <RadioButton x:Name="ThinWidth" GroupName="Width" Style="{StaticResource ToolBtn}"
+                                         Content="细" Tag="1.5" IsChecked="False" Checked="Width_Checked"/>
+                            <RadioButton x:Name="MidWidth" GroupName="Width" Style="{StaticResource ToolBtn}"
+                                         Content="中" Tag="2.5" IsChecked="True" Checked="Width_Checked"/>
+                            <RadioButton x:Name="ThickWidth" GroupName="Width" Style="{StaticResource ToolBtn}"
+                                         Content="粗" Tag="4" Checked="Width_Checked"/>
+                        </StackPanel>
 
                         <Border Style="{StaticResource ToolSep}"/>
 

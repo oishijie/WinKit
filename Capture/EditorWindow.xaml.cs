@@ -9,22 +9,21 @@ using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using SWF = System.Windows.Forms;
 using WPoint = System.Windows.Point;
+using WinKit.Capture.Annotations;
 
 namespace WinKit.Capture
 {
     /// <summary>
     /// 截图编辑器 — 底图 + 标注层（Canvas）+ 工具栏。
     ///
-    /// 标注采用「元素即记录」模型：每次操作往 OverlayCanvas 里加一批 WPF 元素，
-    /// 这批元素原样进撤销栈，撤销/重做就是整批加回或移除，无需序列化中间状态。
+    /// 标注采用「对象模型」：每个标注是一个 IAnnotation 对象，由 AnnotationController
+    /// 统一管理「工具工厂 / 选中态 / 命中 / 命令化撤销」。选中后可移动、删除、改色。
     ///
     /// 坐标约定：位图按物理像素采集，而 WPF 布局走逻辑单位，两者差一个 DPI 缩放系数。
     /// 图像按 1/scale 的逻辑尺寸布局，于是屏幕上正好 1:1；反向换算即可得到像素坐标。
     /// </summary>
     public partial class EditorWindow : Window
     {
-        private enum ToolKind { Rect, Arrow, Pen, Mosaic }
-
         private readonly BitmapSource _image;
         private readonly System.Drawing.Rectangle _region;
         private readonly bool _copiedToClipboard;
@@ -32,31 +31,32 @@ namespace WinKit.Capture
         private double _scaleX = 1.0;
         private double _scaleY = 1.0;
 
-        private ToolKind _tool = ToolKind.Rect;
+        private AnnotationController.ToolKind _tool = AnnotationController.ToolKind.Rect;
 
-        // 绘制中的临时元素（同时也是最终元素，见类注释）
+        // 标注控制器：工厂 + 选中态 + 命令化撤销
+        private AnnotationController? _controller;
+
+        // 当前绘制中的标注与临时预览元素
         private bool _drawing;
-        private WPoint _startPoint;
-        private Rectangle? _rectPreview;
-        private System.Windows.Shapes.Path? _arrowPreview;
-        private Polyline? _penPreview;
+        private bool _draggingSelection;
+        private WPoint _dragStartPoint;
+        private IAnnotation? _activeAnnotation;
+        private FrameworkElement? _activePreview;
 
-        // 撤销 / 重做：一个条目 = 一次操作加入的一批元素
-        private readonly Stack<List<UIElement>> _undoStack = new();
-        private readonly Stack<List<UIElement>> _redoStack = new();
+        // 橡皮擦状态
+        private bool _erasing;
+        private readonly List<WPoint> _eraseTrack = new();
+
+        // 缩放 / 旋转状态
+        private bool _resizing;
+        private int _resizeHandle;
+        private bool _rotating;
+        private WPoint _rotateLast;
+        private WPoint _rotateCenter;
 
         /// <summary>标注主色：红色，在绝大多数截图上都有足够对比度</summary>
-        private static readonly Brush StrokeBrush = CreateFrozen(Color.FromRgb(0xFF, 0x3B, 0x30));
-        private const double StrokeThickness = 2.5;
-        /// <summary>马赛克块边长（物理像素）</summary>
-        private const int MosaicBlock = 8;
-
-        private static SolidColorBrush CreateFrozen(Color c)
-        {
-            var b = new SolidColorBrush(c);
-            b.Freeze();
-            return b;
-        }
+        private static readonly Color DefaultColor = Color.FromRgb(0xFF, 0x3B, 0x30);
+        private const double DefaultThickness = 2.5;
 
         /// <summary>
         /// <paramref name="image"/> 为已截取的画面；<paramref name="region"/> 为它在屏幕上的物理像素位置，
@@ -79,6 +79,8 @@ namespace WinKit.Capture
             var dpi = VisualTreeHelper.GetDpi(this);
             _scaleX = dpi.DpiScaleX <= 0 ? 1.0 : dpi.DpiScaleX;
             _scaleY = dpi.DpiScaleY <= 0 ? 1.0 : dpi.DpiScaleY;
+
+            _controller = new AnnotationController(OverlayCanvas, DefaultColor, DefaultThickness);
 
             // 物理像素 → 逻辑单位，保证在屏幕上按原始尺寸 1:1 呈现
             double w = _image.PixelWidth / _scaleX;
@@ -146,9 +148,32 @@ namespace WinKit.Capture
         private void Tool_Checked(object sender, RoutedEventArgs e)
         {
             if (sender is RadioButton rb && rb.Tag is string tag
-                && Enum.TryParse<ToolKind>(tag, out var kind))
+                && Enum.TryParse<AnnotationController.ToolKind>(tag, out var kind))
             {
                 _tool = kind;
+            }
+        }
+
+        private void Color_Checked(object sender, RoutedEventArgs e)
+        {
+            if (_controller == null) return;
+            if (sender is RadioButton rb && rb.Tag is string hex)
+            {
+                try
+                {
+                    _controller.Color = (Color)ColorConverter.ConvertFromString(hex);
+                }
+                catch { /* 无效色值忽略 */ }
+            }
+        }
+
+        private void Width_Checked(object sender, RoutedEventArgs e)
+        {
+            if (_controller == null) return;
+            if (sender is RadioButton rb && rb.Tag is string w
+                && double.TryParse(w, out var thickness))
+            {
+                _controller.Thickness = thickness;
             }
         }
 
@@ -203,7 +228,20 @@ namespace WinKit.Capture
 
             if (e.Key == Key.Escape)
             {
+                // 先取消选中；无选中时关闭窗口
+                if (_controller != null && _controller.HasSelection)
+                {
+                    _controller.Deselect();
+                    e.Handled = true;
+                    return;
+                }
                 Close();
+                e.Handled = true;
+            }
+            else if (e.Key == Key.Delete)
+            {
+                _controller?.DeleteSelected();
+                UpdateUndoRedoState();
                 e.Handled = true;
             }
             else if (ctrl && e.Key == Key.Z)
@@ -225,90 +263,192 @@ namespace WinKit.Capture
         private void Canvas_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
         {
             if (e.ChangedButton != MouseButton.Left) return;
+            if (_controller == null) return;
 
-            _drawing = true;
-            _startPoint = e.GetPosition(OverlayCanvas);
-            OverlayCanvas.CaptureMouse();
+            var p = e.GetPosition(OverlayCanvas);
 
-            switch (_tool)
+            // ── 橡皮擦工具：拖动擦除 ──
+            if (_tool == AnnotationController.ToolKind.Eraser)
             {
-                case ToolKind.Rect:
-                    _rectPreview = new Rectangle
-                    {
-                        Stroke = StrokeBrush,
-                        StrokeThickness = StrokeThickness,
-                        Fill = CreateFrozen(Color.FromArgb(0x22, 0xFF, 0x3B, 0x30)),
-                        IsHitTestVisible = false,
-                    };
-                    OverlayCanvas.Children.Add(_rectPreview);
-                    break;
-
-                case ToolKind.Arrow:
-                    _arrowPreview = new System.Windows.Shapes.Path
-                    {
-                        Stroke = StrokeBrush,
-                        StrokeThickness = StrokeThickness,
-                        StrokeLineJoin = PenLineJoin.Round,
-                        StrokeStartLineCap = PenLineCap.Round,
-                        StrokeEndLineCap = PenLineCap.Round,
-                        IsHitTestVisible = false,
-                    };
-                    OverlayCanvas.Children.Add(_arrowPreview);
-                    break;
-
-                case ToolKind.Pen:
-                    _penPreview = new Polyline
-                    {
-                        Stroke = StrokeBrush,
-                        StrokeThickness = StrokeThickness,
-                        StrokeLineJoin = PenLineJoin.Round,
-                        StrokeStartLineCap = PenLineCap.Round,
-                        StrokeEndLineCap = PenLineCap.Round,
-                        IsHitTestVisible = false,
-                    };
-                    _penPreview.Points.Add(_startPoint);
-                    OverlayCanvas.Children.Add(_penPreview);
-                    break;
-
-                case ToolKind.Mosaic:
-                    // 拖动期间先用虚线框示意，松手才落马赛克
-                    _rectPreview = new Rectangle
-                    {
-                        Stroke = StrokeBrush,
-                        StrokeThickness = 1.5,
-                        StrokeDashArray = new DoubleCollection { 4, 3 },
-                        IsHitTestVisible = false,
-                    };
-                    OverlayCanvas.Children.Add(_rectPreview);
-                    break;
+                _erasing = true;
+                _eraseTrack.Clear();
+                _eraseTrack.Add(p);
+                OverlayCanvas.CaptureMouse();
+                e.Handled = true;
+                return;
             }
+
+            // ── 已有选中标注：先判断命中控点/旋转圈 ──
+            if (_controller.Selected != null && TryHitHandle(p, out int handle, out bool rotate))
+            {
+                if (rotate && _controller.Selected.SupportsRotation)
+                {
+                    _rotating = true;
+                    _rotateLast = p;
+                    _rotateCenter = CenterOf(_controller.Selected.Bounds);
+                    _controller.BeginRotate();
+                }
+                else if (!rotate && _controller.Selected.SupportsResize)
+                {
+                    _resizing = true;
+                    _resizeHandle = handle;
+                    _controller.BeginResize();
+                }
+                OverlayCanvas.CaptureMouse();
+                e.Handled = true;
+                return;
+            }
+
+            // ── 点选已存在的标注：进入拖动（移动）模式 ──
+            if (_controller.TrySelect(p))
+            {
+                _draggingSelection = true;
+                _dragStartPoint = p;
+                _controller.BeginDrag(p);
+                OverlayCanvas.CaptureMouse();
+                e.Handled = true;
+                return;
+            }
+
+            // ── 点空白：开始新标注（Draw 模式）──
+            _controller.Deselect();
+            _drawing = true;
+            _dragStartPoint = p;
+            _activeAnnotation = CreateAnnotation(_tool);
+            _activePreview = _activeAnnotation.CreatePreview();
+            OverlayCanvas.Children.Add(_activePreview);
+            OverlayCanvas.CaptureMouse();
 
             e.Handled = true;
         }
 
-        private void Canvas_MouseMove(object sender, MouseEventArgs e)
+        /// <summary>
+        /// 判断点是否命中选中标注的控点或旋转圈。
+        /// 返回 true 且 rotate=true 表示命中旋转圈；rotate=false 表示命中缩放柄（handle 0-7）。
+        /// </summary>
+        private bool TryHitHandle(Point p, out int handle, out bool rotate)
         {
-            if (!_drawing) return;
+            handle = -1;
+            rotate = false;
+            var sel = _controller?.Selected;
+            if (sel == null) return false;
 
-            var p = e.GetPosition(OverlayCanvas);
-            var rect = Normalize(_startPoint, p);
+            var bounds = sel.Bounds;
+            if (bounds.IsEmpty) return false;
 
-            switch (_tool)
+            const double handleSize = 8.0;   // 控点直径
+            const double hitBand = 6.0;      // 命中容差
+            double half = handleSize / 2;
+
+            // 只有支持缩放的形状才检查 8 个控点
+            if (sel.SupportsResize)
             {
-                case ToolKind.Rect:
-                case ToolKind.Mosaic:
-                    if (_rectPreview != null) ApplyRect(_rectPreview, rect);
-                    break;
+                var handles = new (Point p, int idx)[]
+                {
+                    (new Point(bounds.Left, bounds.Top), 0),
+                    (new Point(bounds.Left + bounds.Width / 2, bounds.Top), 1),
+                    (new Point(bounds.Right, bounds.Top), 2),
+                    (new Point(bounds.Right, bounds.Top + bounds.Height / 2), 3),
+                    (new Point(bounds.Right, bounds.Bottom), 4),
+                    (new Point(bounds.Left + bounds.Width / 2, bounds.Bottom), 5),
+                    (new Point(bounds.Left, bounds.Bottom), 6),
+                    (new Point(bounds.Left, bounds.Top + bounds.Height / 2), 7),
+                };
 
-                case ToolKind.Arrow:
-                    if (_arrowPreview != null) _arrowPreview.Data = BuildArrowGeometry(_startPoint, p);
-                    break;
-
-                case ToolKind.Pen:
-                    _penPreview?.Points.Add(p);
-                    break;
+                foreach (var h in handles)
+                {
+                    if (Math.Abs(p.X - h.p.X) <= half + hitBand &&
+                        Math.Abs(p.Y - h.p.Y) <= half + hitBand)
+                    {
+                        handle = h.idx;
+                        return true;
+                    }
+                }
             }
 
+            // 旋转圈：四角外 4-26px 一圈
+            if (sel.SupportsRotation)
+            {
+                var corners = new[]
+                {
+                    new Point(bounds.Left, bounds.Top),
+                    new Point(bounds.Right, bounds.Top),
+                    new Point(bounds.Right, bounds.Bottom),
+                    new Point(bounds.Left, bounds.Bottom),
+                };
+                foreach (var c in corners)
+                {
+                    double d = (p - c).Length;
+                    if (d > 4 && d <= 26)
+                    {
+                        rotate = true;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static Point CenterOf(Rect r) => new(r.X + r.Width / 2, r.Y + r.Height / 2);
+
+        /// <summary>
+        /// 创建标注对象。马赛克需要底图与 DPI 系数，单独处理；
+        /// 其余走控制器工厂（无需额外上下文）。
+        /// </summary>
+        private IAnnotation CreateAnnotation(AnnotationController.ToolKind tool)
+        {
+            if (tool == AnnotationController.ToolKind.Mosaic)
+            {
+                return new MosaicAnnotation(_image, _scaleX, _scaleY,
+                    _controller!.Color, _controller.Thickness);
+            }
+            return _controller!.CreateAnnotation(tool);
+        }
+
+        private void Canvas_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_controller == null) return;
+            var p = e.GetPosition(OverlayCanvas);
+
+            // 橡皮擦拖动：收集轨迹点
+            if (_erasing)
+            {
+                _eraseTrack.Add(p);
+                e.Handled = true;
+                return;
+            }
+
+            // 缩放拖动
+            if (_resizing)
+            {
+                _controller.ResizeSelected(_resizeHandle, p);
+                e.Handled = true;
+                return;
+            }
+
+            // 旋转拖动：绕中心计算角度增量
+            if (_rotating)
+            {
+                double a1 = Math.Atan2(_rotateLast.Y - _rotateCenter.Y, _rotateLast.X - _rotateCenter.X);
+                double a2 = Math.Atan2(p.Y - _rotateCenter.Y, p.X - _rotateCenter.X);
+                _controller.RotateSelected(a2 - a1);
+                _rotateLast = p;
+                e.Handled = true;
+                return;
+            }
+
+            // 拖动已选中的标注（移动）
+            if (_draggingSelection)
+            {
+                _controller.Drag(p);
+                e.Handled = true;
+                return;
+            }
+
+            // 绘制新标注
+            if (!_drawing || _activeAnnotation == null || _activePreview == null) return;
+            _activeAnnotation.Update(_activePreview, _dragStartPoint, p);
             e.Handled = true;
         }
 
@@ -319,192 +459,127 @@ namespace WinKit.Capture
             _drawing = false;
             OverlayCanvas.ReleaseMouseCapture();
 
-            if (_rectPreview != null) { OverlayCanvas.Children.Remove(_rectPreview); _rectPreview = null; }
-            if (_arrowPreview != null) { OverlayCanvas.Children.Remove(_arrowPreview); _arrowPreview = null; }
-            if (_penPreview != null) { OverlayCanvas.Children.Remove(_penPreview); _penPreview = null; }
+            if (_activePreview != null)
+            {
+                OverlayCanvas.Children.Remove(_activePreview);
+                _activePreview = null;
+            }
+            _activeAnnotation = null;
 
             e.Handled = true;
         }
 
         private void Canvas_MouseLeftButtonUp(object sender, MouseButtonEventArgs e)
         {
-            if (!_drawing) return;
-            _drawing = false;
+            if (_controller == null) return;
             OverlayCanvas.ReleaseMouseCapture();
 
-            var end = e.GetPosition(OverlayCanvas);
-            var rect = Normalize(_startPoint, end);
-
-            switch (_tool)
+            // 结束橡皮擦：批量删除命中标注
+            if (_erasing)
             {
-                case ToolKind.Rect:
-                    if (_rectPreview != null)
-                    {
-                        if (rect.Width >= 3 && rect.Height >= 3) Commit(_rectPreview);
-                        else OverlayCanvas.Children.Remove(_rectPreview);
-                        _rectPreview = null;
-                    }
-                    break;
-
-                case ToolKind.Arrow:
-                    if (_arrowPreview != null)
-                    {
-                        double len = (end - _startPoint).Length;
-                        if (len >= 4) Commit(_arrowPreview);
-                        else OverlayCanvas.Children.Remove(_arrowPreview);
-                        _arrowPreview = null;
-                    }
-                    break;
-
-                case ToolKind.Pen:
-                    if (_penPreview != null)
-                    {
-                        if (_penPreview.Points.Count >= 2) Commit(_penPreview);
-                        else OverlayCanvas.Children.Remove(_penPreview);
-                        _penPreview = null;
-                    }
-                    break;
-
-                case ToolKind.Mosaic:
-                    if (_rectPreview != null)
-                    {
-                        OverlayCanvas.Children.Remove(_rectPreview);
-                        _rectPreview = null;
-
-                        if (rect.Width >= 3 && rect.Height >= 3)
-                        {
-                            var mosaic = CreateMosaic(rect);
-                            if (mosaic != null)
-                            {
-                                OverlayCanvas.Children.Add(mosaic);
-                                Commit(mosaic);
-                            }
-                        }
-                    }
-                    break;
-            }
-
-            e.Handled = true;
-        }
-
-        private static void ApplyRect(Rectangle el, Rect rect)
-        {
-            Canvas.SetLeft(el, rect.X);
-            Canvas.SetTop(el, rect.Y);
-            el.Width = rect.Width;
-            el.Height = rect.Height;
-        }
-
-        private static Rect Normalize(WPoint a, WPoint b) => new(
-            Math.Min(a.X, b.X),
-            Math.Min(a.Y, b.Y),
-            Math.Abs(a.X - b.X),
-            Math.Abs(a.Y - b.Y));
-
-        /// <summary>由起点终点算出「主干 + 两撇箭头」的几何</summary>
-        private static Geometry BuildArrowGeometry(WPoint start, WPoint end)
-        {
-            var group = new GeometryGroup();
-            group.Children.Add(new LineGeometry(start, end));
-
-            double angle = Math.Atan2(end.Y - start.Y, end.X - start.X);
-            const double headLen = 14.0;
-            const double spread = Math.PI / 7;   // 约 25.7°
-
-            var wing1 = new WPoint(
-                end.X - headLen * Math.Cos(angle - spread),
-                end.Y - headLen * Math.Sin(angle - spread));
-            var wing2 = new WPoint(
-                end.X - headLen * Math.Cos(angle + spread),
-                end.Y - headLen * Math.Sin(angle + spread));
-
-            group.Children.Add(new LineGeometry(end, wing1));
-            group.Children.Add(new LineGeometry(end, wing2));
-            return group;
-        }
-
-        /// <summary>
-        /// 生成马赛克贴片：从底图裁出该区域 → 缩到极小 → 交给 Image 以最近邻放大。
-        /// 只做一次缩小变换，放大阶段的插值由 Image 元素按 NearestNeighbor 控制，出来的块才是硬的。
-        /// </summary>
-        private UIElement? CreateMosaic(Rect rect)
-        {
-            int px = (int)Math.Round(rect.X * _scaleX);
-            int py = (int)Math.Round(rect.Y * _scaleY);
-            int pw = (int)Math.Round(rect.Width * _scaleX);
-            int ph = (int)Math.Round(rect.Height * _scaleY);
-
-            px = Math.Max(0, Math.Min(px, _image.PixelWidth - 1));
-            py = Math.Max(0, Math.Min(py, _image.PixelHeight - 1));
-            pw = Math.Max(1, Math.Min(pw, _image.PixelWidth - px));
-            ph = Math.Max(1, Math.Min(ph, _image.PixelHeight - py));
-
-            if (pw <= 0 || ph <= 0) return null;
-
-            try
-            {
-                var cropped = new CroppedBitmap(_image, new Int32Rect(px, py, pw, ph));
-
-                double sx = Math.Min(1.0, (double)MosaicBlock / pw);
-                double sy = Math.Min(1.0, (double)MosaicBlock / ph);
-
-                var small = new TransformedBitmap(cropped, new ScaleTransform(sx, sy));
-                small.Freeze();
-
-                var img = new Image
+                _erasing = false;
+                if (_eraseTrack.Count > 0)
                 {
-                    Source = small,
-                    Width = rect.Width,
-                    Height = rect.Height,
-                    Stretch = Stretch.Fill,
-                    IsHitTestVisible = false,
-                };
-                RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.NearestNeighbor);
+                    _controller.EraseAlong(_eraseTrack);
+                }
+                _eraseTrack.Clear();
+                UpdateUndoRedoState();
+                e.Handled = true;
+                return;
+            }
 
-                Canvas.SetLeft(img, rect.X);
-                Canvas.SetTop(img, rect.Y);
-                return img;
-            }
-            catch (Exception ex)
+            // 结束缩放
+            if (_resizing)
             {
-                System.Diagnostics.Debug.WriteLine($"马赛克生成失败: {ex.Message}");
-                return null;
+                _resizing = false;
+                _controller.EndResize();
+                UpdateUndoRedoState();
+                e.Handled = true;
+                return;
             }
+
+            // 结束旋转
+            if (_rotating)
+            {
+                _rotating = false;
+                _controller.EndRotate();
+                UpdateUndoRedoState();
+                e.Handled = true;
+                return;
+            }
+
+            // 结束拖动选中的标注
+            if (_draggingSelection)
+            {
+                _draggingSelection = false;
+                _controller.EndDrag();
+                e.Handled = true;
+                return;
+            }
+
+            // 结束绘制新标注
+            if (!_drawing || _activeAnnotation == null || _activePreview == null) return;
+            _drawing = false;
+
+            var end = e.GetPosition(OverlayCanvas);
+
+            // 画笔在 MouseMove 里已逐点追加，松手无需再 Update（否则会重复加终点）；
+            // 其余形状用最终位置刷新一次，兜底「按下即松手」的边界。
+            if (_activeAnnotation is not PenAnnotation)
+            {
+                _activeAnnotation.Update(_activePreview, _dragStartPoint, end);
+            }
+
+            // 马赛克特殊处理：先移除虚线框，再生成真正的马赛克贴片
+            if (_activeAnnotation is MosaicAnnotation mosaic)
+            {
+                OverlayCanvas.Children.Remove(_activePreview);
+                _activePreview = null;
+
+                if (mosaic.BuildMosaic())
+                {
+                    OverlayCanvas.Children.Add(mosaic.Visual);
+                    _controller.AddCommitted(mosaic);
+                }
+            }
+            else if (_activeAnnotation.Commit(_activePreview))
+            {
+                // 提交成功：预览元素即最终元素，登记新增命令
+                _controller.AddCommitted(_activeAnnotation);
+            }
+            else
+            {
+                // 太小/无效：丢弃预览元素
+                OverlayCanvas.Children.Remove(_activePreview);
+            }
+
+            _activeAnnotation = null;
+            _activePreview = null;
+            UpdateUndoRedoState();
+            e.Handled = true;
         }
 
         // ══════════════════════════════════════════════
         //  撤销 / 重做
         // ══════════════════════════════════════════════
 
-        private void Commit(UIElement element)
-        {
-            _undoStack.Push(new List<UIElement> { element });
-            _redoStack.Clear();
-            UpdateUndoRedoState();
-        }
-
         private void Undo()
         {
-            if (_undoStack.Count == 0) return;
-            var batch = _undoStack.Pop();
-            foreach (var el in batch) OverlayCanvas.Children.Remove(el);
-            _redoStack.Push(batch);
+            _controller?.Undo();
             UpdateUndoRedoState();
         }
 
         private void Redo()
         {
-            if (_redoStack.Count == 0) return;
-            var batch = _redoStack.Pop();
-            foreach (var el in batch) OverlayCanvas.Children.Add(el);
-            _undoStack.Push(batch);
+            _controller?.Redo();
             UpdateUndoRedoState();
         }
 
         private void UpdateUndoRedoState()
         {
-            UndoBtn.IsEnabled = _undoStack.Count > 0;
-            RedoBtn.IsEnabled = _redoStack.Count > 0;
+            if (_controller == null) return;
+            UndoBtn.IsEnabled = _controller.CanUndo;
+            RedoBtn.IsEnabled = _controller.CanRedo;
         }
 
         // ══════════════════════════════════════════════
