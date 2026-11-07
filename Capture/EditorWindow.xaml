@@ -184,6 +184,9 @@
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Content="钉图" Style="{StaticResource WinBtnDark}"
                                 Click="PinBtn_Click" ToolTip="把当前截图钉到桌面"/>
+                        <Button Content="挂衣架" Style="{StaticResource WinBtnDark}"
+                                Margin="4,0,0,0"
+                                Click="RackBtn_Click" ToolTip="把当前截图挂到晾衣架"/>
                         <Button Content="复制" Style="{StaticResource WinBtnDarkPrimary}"
                                 Margin="4,0,0,0"
                                 Click="CopyBtn_Click"/>

@@ -203,6 +203,15 @@ namespace WinKit.Capture
             Close();
         }
 
+        private void RackBtn_Click(object sender, RoutedEventArgs e)
+        {
+            // 挂衣架：把当前合成结果挂到晾衣架，然后关闭编辑器
+            var img = ComposeImage();
+            var app = (App)Application.Current;
+            app.RackModule?.HangImage(img);
+            Close();
+        }
+
         private void SaveBtn_Click(object sender, RoutedEventArgs e)
         {
             var dlg = new Microsoft.Win32.SaveFileDialog

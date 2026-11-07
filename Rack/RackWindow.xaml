@@ -1,0 +1,31 @@
+<Window x:Class="WinKit.Rack.RackWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="晾衣架"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ShowInTaskbar="False"
+        Topmost="True"
+        ResizeMode="NoResize"
+        WindowStartupLocation="Manual"
+        ShowActivated="False">
+
+    <!--
+        晾衣架：屏幕顶端一根下垂的绳子，卡片挂在绳子上。
+        MVP 版：展开态显示绳子 + 卡片，收起态只留顶部 8px 热区。
+        自动收起靠 DispatcherTimer 轮询鼠标位置 + 时间戳阈值（借鉴 SnowAir-Rack）。
+    -->
+
+    <Grid x:Name="Root">
+        <!-- 绳子：三次贝塞尔曲线，中间下垂 -->
+        <Path x:Name="RopePath"
+              Stroke="#B8865B"
+              StrokeThickness="2.5"
+              StrokeStartLineCap="Round"
+              StrokeEndLineCap="Round"/>
+
+        <!-- 卡片容器 -->
+        <Canvas x:Name="CardCanvas"/>
+    </Grid>
+</Window>
