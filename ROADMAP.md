@@ -39,10 +39,10 @@
 - [ ] 移植 `QuickPhrase*` 系列；核心难点：vv 连击判定与中文输入法状态识别长在 `KeyboardHookService` 里，需把该段（约 60 行）手工移植进本仓库钩子，**不得整体覆盖**（会毁掉 0xFF 防开始菜单机制）
 
 ### 5. 晾衣架（Rack）MVP 可用性（已完成，2026-11-07）
-- [x] 首次打开自动装载待办 / 剪贴板内容、空态提示、托盘菜单状态（收起 / 展开）同步
+- [x] ~~首次打开自动装载待办 / 剪贴板内容~~ → **2026-11-07 复刻修正**：该行为与 SnowAir 相反，已删除；首次打开只恢复 `rack_items.json` 里的卡片，空态提示、托盘菜单状态（收起 / 展开）同步保留
 - [x] 修复高 DPI 下顶部热区失效、挂入卡片 1.2 秒后消失、自动收起后需点两次、透明窗口吞掉屏幕顶部点击
 - [x] 补全模块文档（`AGENTS.md` 架构铁律 + README 功能说明 + CHANGELOG）
-- [ ] 持久化（当前 MVP 重启清空）、卡片单独移除 / 拖回排序
+- [x] 持久化（重启清空）、卡片单独移除 / 拖回排序 —— **2026-11-07 一比一复刻时一并完成**：`rack_items.json`（20 字段）+ `rack_images/<hash>.png`、hash 去重、上限淘汰、横向拖动重排落盘、右键移除 / 锁定；另加 4 套主题、信封 / 篮子、14 项设置分区；**两个合并池**：信封＝剪贴板按内容去重（文本 / 图片 / 文件），篮子＝待办按标题合并（只读 `todos.md`），两边点「上绳」才挂，只有截图自动上绳、同正文只晃原卡；**视觉**：官方 PNG 全套 + `iconfont.ttf` 图标字体 + `letter.png` 信纸卡 + 380×550 几何气泡 + 金属夹子
 
 ## 中期
 
@@ -51,7 +51,7 @@
   - **RapidOcrNet 4.2.0 直接支持**：`lib/net10.0` + `lib/net8.0` 双资产，nuspec 里明确声明 `targetFramework="net10.0"` 依赖组（Clipper2 2.0.0 / ONNX Runtime 1.29.0 / SkiaSharp 3.119.1）。迁移不必换 OCR 引擎。
   - ONNX 原生 `onnxruntime.dll` 位于 `runtimes/win-x64/native`，**与 TFM 无关**；托管 `OnnxRuntime.Managed` 最细到 `net8.0` / `netstandard2.0`，net10 项目可向下引用。`SkiaSharp 3.119.1`、`System.Drawing.Common 8.0.7`、`Sqlite 8.0.0`、`ProtectedData 8.0.0` 同理都有 net8.0 或 netstandard2.0 资产。
   - ⚠️ **唯一硬阻塞**：`Directory.Build.props` 把三个 ref pack 版本钉死在 **8.0.33**（SDK 10 还原 net8 的镜像补丁）。改 TFM 到 `net10.0-windows` 时必须先删掉或改成「仅 net8 生效」的条件属性，否则 SDK 10 会拿 8.0.33 去当 net10 的引用程序集。
-  - 前置四步（**本轮不做**）：① 条件化 `Directory.Build.props` → ② 用命令行 `-p:TargetFramework=net10.0-windows` 试构建，`obj/bin` 用 `-p:BaseIntermediateOutputPath` 隔离到临时目录，不污染工作区 → ③ 过 `tools/preflight.ps1` + `docs` 的 12 项人工冒烟（重点验 OCR 预热 / 全局热键 / 低级钩子）→ ④ 才改 `.csproj` 的 TFM 并更新门禁脚本的输出路径常量。
+  - 前置四步（**本轮不做**）：① 条件化 `Directory.Build.props` → ② 用命令行 `-p:TargetFramework=net10.0-windows` 试构建，`obj/bin` 用 `-p:BaseIntermediateOutputPath` 隔离到临时目录，不污染工作区 → ③ 过 `tools/preflight.ps1` + `docs` 的 13 项人工冒烟（重点验 OCR 预热 / 全局热键 / 低级钩子）→ ④ 才改 `.csproj` 的 TFM 并更新门禁脚本的输出路径常量。
 - **翻译引擎补全**：DeepL / Azure 接入（`ITranslator` 接口已预留位），补设置项与测试。
 - **OCR 识别质量（第二轮，已完成 2026-10-29）**：大图缩放上限 960→2048、小字增强两遍制、置信度过滤与状态栏展示、`DetectAsync` 真取消、反色改 3×3 网格投票、`IOcrProvider` 接口补齐。详见 `CHANGELOG.md` Unreleased 段。
 - **OCR 剩余可选项**（按收益排序，均未开工）：

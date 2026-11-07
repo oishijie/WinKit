@@ -335,5 +335,59 @@ namespace WinKit.Common
         /// 若此项与 <see cref="CaptureAutoCopy"/> 同时关闭，截图将毫无产出，因此代码会强制至少复制一次。
         /// </summary>
         public bool CaptureOpenEditor { get; set; } = true;
+
+        // ── Rack 晾衣架设置 ─────────────────────────────
+        // 形态对齐 SnowAir-Rack：4 套主题、近水平横杆 + 左信封 + 右篮子、
+        // 信封＝剪贴板合并池、篮子＝待办合并池，绳子默认只挂图片；
+        // 卡片持久化到 %APPDATA%/WinKit/rack_items.json。
+
+        /// <summary>主题：graphite 石墨 / paper 纸白 / terracotta 赤陶 / deepsea 深海</summary>
+        public string RackTheme { get; set; } = "graphite";
+
+        /// <summary>卡片尺寸：small 100px / medium 132px / large 164px</summary>
+        public string RackCardScale { get; set; } = "medium";
+
+        /// <summary>显示横杆</summary>
+        public bool RackShowRope { get; set; } = true;
+
+        /// <summary>显示左信封与右篮子</summary>
+        public bool RackShowDecor { get; set; } = true;
+
+        /// <summary>显示卡片顶部的夹子</summary>
+        public bool RackShowClip { get; set; } = true;
+
+        /// <summary>鼠标悬停顶部 8px 热区时自动展开（默认 600ms）</summary>
+        public bool RackHoverExpand { get; set; } = true;
+
+        /// <summary>鼠标离开后自动收起（默认 1200ms）</summary>
+        public bool RackAutoHide { get; set; } = true;
+
+        /// <summary>悬停展开延时（毫秒，100–3000）</summary>
+        public int RackHoverDelayMs { get; set; } = 600;
+
+        /// <summary>自动收起延时（毫秒，300–10000）</summary>
+        public int RackAutoHideMs { get; set; } = 1200;
+
+        /// <summary>重启后恢复卡片（关闭则每次启动都是空晾衣架，且不写盘）</summary>
+        public bool RackPersistItems { get; set; } = true;
+
+        /// <summary>卡片数量上限（5–60）；超出后淘汰最旧的未锁定卡片</summary>
+        public int RackMaxItems { get; set; } = 24;
+
+        /// <summary>
+        /// 截图编辑器点「完成」时，自动把成品图也挂一份到晾衣架。
+        /// 对齐 SnowAir-Rack 的 OnCapture：只有截图会自动上绳。
+        /// </summary>
+        public bool RackAutoHangCapture { get; set; } = false;
+
+        /// <summary>
+        /// 复制文本时是否自动上绳（默认关）。
+        /// SnowAir 的文本是合并进信封气泡的，不会一条一条挂到绳子上；
+        /// 只有用户主动开启，才把每段新文本直接生成一张卡片。
+        /// </summary>
+        public bool RackAutoHangText { get; set; } = false;
+
+        /// <summary>允许横向拖动卡片改变顺序</summary>
+        public bool RackEnableReorder { get; set; } = true;
     }
 }

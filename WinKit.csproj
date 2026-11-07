@@ -86,6 +86,23 @@
     <None Update="models\**\*.*" CopyToOutputDirectory="PreserveNewest" Visible="false" />
   </ItemGroup>
 
+  <!--
+    晾衣架主题素材（Rack/Assets，约 1.83MB）：信封 / 篮子 / 4 套主题预览图 /
+    letter.png 信纸卡 / iconfont.ttf 图标字体。
+    以 Content 形式随输出目录分发，而不是嵌进程序集 ——
+    这样主题切换可按文件名直接换图，且第三方素材的 NOTICE.txt 能原样随包保留。
+    许可见 Rack/Assets/NOTICE.txt（Apache-2.0 素材 + PicRope MIT 衍生图）。
+  -->
+  <ItemGroup>
+    <None Remove="Rack\Assets\**\*.png" />
+    <None Remove="Rack\Assets\**\*.ttf" />
+    <Resource Remove="Rack\Assets\**\*.png" />
+    <Resource Remove="Rack\Assets\**\*.ttf" />
+    <Content Include="Rack\Assets\**\*.png" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Rack\Assets\**\*.ttf" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="Rack\Assets\NOTICE.txt" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
   <!-- 缺少模型会导致应用启动后 OCR 完全不可用，这里在构建期直接拦截 -->
   <Target Name="VerifyLocalOcrModels" AfterTargets="Build" Condition="'$(DesignTimeBuild)' != 'true'">
     <Error Condition="!Exists('$(OutDir)models\PP-OCRv6_det_small.onnx')"

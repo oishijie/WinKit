@@ -6,6 +6,7 @@
 ## [2.4.1] — 2026-11-07
 
 ### Fixed 修复
+- **晾衣架「文本一条一条挂起来」是复刻方向错误（用户实测反馈后回查源码）**：`CM-idea/SnowAir-Rack` 里 `Plugin.cpp:90` 只有 `OnCapture(path)`（截图）自动上绳，文本**没有**任何自动上绳路径；`ClipboardBubble.cpp:329–393 LoadEntries()` 按 `EntryContentKey` 把复制过的文本**合并去重**成一个气泡列表，用户点「挂到绳子上」才生成卡片（`ClipboardBubble.cpp:1103` / `Plugin.cpp:225`）；信封 / 篮子还各带条数角标。旧实现反其道而行：`RackModule.LoadFromSources()` 在首次打开时把未完成待办 + 最近剪贴板文本 / 图片逐条挂满绳子，点信封又直接把当前剪贴板挂上去。修法：删除 `LoadFromSources()`，首次打开只恢复 `rack_items.json`；信封改为 `RackListPanel` 的剪贴板合并池（按内容指纹去重、重复显示 ×N、点「上绳」/双击才挂）；篮子改为待办合并池（按标题合并，只读 `todos.md`）；同正文重复挂载只晃原卡；设置拆成「截图完成后自动挂载」与「复制文本自动上绳」（**默认关**）两项。**本条后续又按用户反馈做了二次纠错（篮子语义 + 视觉复刻），见上方 Added 段。**
 - **【严重】「一编辑就闪退」**：用户实测连崩三次，Windows 事件日志（`.NET Runtime` Id=1026）给出同一堆栈 —— `System.ArgumentException: 指定的 Visual 已经是另一个 Visual 的子级或者已经是 CompositionTarget 的根`，`AnnotationController.AddCommitted` (line 90) ← `EditorWindow.Canvas_MouseLeftButtonUp` (line 663)。根因：`Canvas_MouseLeftButtonDown` 已经把预览元素 `Children.Add` 进 `OverlayCanvas`，而矩形 / 箭头 / 画笔 / 椭圆的 `Visual` 与 `CreatePreview()` 返回的是**同一个实例**，松手提交时 `AddCommitted` 又 Add 一次，WPF 不允许 Visual 有第二个父级。马赛克宿主也会自行 Add，同样命中。修法：`AddCommitted` 先 `Children.Contains(visual)` 判重，只有文字标注这类「松手后重建 Visual」的才真正挂载，顺带加 null 防守。该重复 Add 路径在轮 1 的工具条换皮中没有被触碰，属既有代码结构缺陷；叠加项目零冒烟测试 + 零异常兜底，一直表现为「一画标注就无声退出」。
 - **补齐全局异常兜底**：`App.OnStartup` 订阅 `DispatcherUnhandledException`，未处理的 UI 线程异常先写 `crash.log`（程序目录，含完整堆栈），再弹一次提示，`e.Handled = true` 保持托盘进程存活。此前项目**没有任何异常处理**，所以任何 UI 线程异常都直接击穿进程，排查只能靠翻事件日志（AGENTS.md 里「GUI 崩溃只表现为打不开」同源）。
 - **编辑器「大黑边」**：用户截图 705×97 实测，除左右各约 14px 桌面外，中间 82px 高几乎全是 `#1E1E1E/#202020` 深色，工具条图标只占中间约 16px。三处叠加：`RootBorder` 的不透明 `#FF202020` 底板 + `Margin=10` + `WinShadow` 投影 + 半透明白边；`ScrollViewer` / `ImageHost` 的 `#FF141414` 背景（小截图时窗口被 ~700px 胶囊条撑宽，右侧一整片露出黑底）；铺满整行带分隔线的状态条。现改为窗口整体透明、图片层透明、状态文字收成紧贴文字的小标签，`BaseImage` 仍铺满 `ImageHost`，`ComposeImage` 渲染逻辑一行未动 —— **只保留编辑条**。
@@ -21,7 +22,7 @@
 
 ### Added 新增
 - 晾衣架空态提示（无卡片时也能看出「已打开」）、托盘菜单按状态显示「晾衣架 / 收起晾衣架」、`SizeChanged` 后按卡片实际宽度重排、窗口 `Closed` 时停掉 50ms 轮询计时器。
-- **本地编译门禁**：`tools/preflight.ps1` 自动检查 SDK / restore / build 0 错误 0 警告 / 核心 7 件套 / `models/` 7 文件 / 无 `runtimes/` / 产物体积 / 版本一致性共 10 项，退出码非 0 不许提交；`docs/local-preflight-checklist.md` 给出 12 项人工冒烟自检与发版四件套 + 三镜像资产清单。目的是把「编译错误进仓库」从偶发事故变成提交前必被拦下的事件 —— 纯本机按需执行，不接入任何远程自动化服务。
+- **本地编译门禁**：`tools/preflight.ps1` 自动检查 SDK / restore / build 0 错误 0 警告 / 核心 7 件套 / `models/` 7 文件 / 无 `runtimes/` / 产物体积 / 版本一致性共 10 项，退出码非 0 不许提交；`docs/local-preflight-checklist.md` 给出 13 项人工冒烟自检与发版四件套 + 三镜像资产清单。目的是把「编译错误进仓库」从偶发事故变成提交前必被拦下的事件 —— 纯本机按需执行，不接入任何远程自动化服务。
 - `README.md` 快捷键表补齐 `Win + V`（剪贴板面板，含 Win 键走低级钩子）与 `Alt + T`（待办窗口）两条可配置热键，并修正「所有快捷键都在翻译与 OCR 分区」的旧描述。
 - **截图选区层对齐 SnowAir（复刻轮 1）**：`#34C759` 1px 绿框、8 个白色方形夹点（四角 + 四边中点）、深灰 75% 信息条显示 `X / Y / W×H`。坐标与尺寸统一报**物理像素**，高 DPI 或负坐标副屏下不再出现「显示尺寸 ≠ 实际位图尺寸」。夹点层 `IsHitTestVisible="False"`，框选与 `Complete()` 主流程未动。
 - **标注工具条换成黑色胶囊 17 键图标条（复刻轮 1）**：新增 `Capture/CaptureIcons.xaml`，30 个 24×24 `StreamGeometry` —— 18 个从 `SnowAir-main/images/icon/*.svg` 提取，12 个按同网格手绘补齐。主条槽位按 `show-cursor / rect / arrow / pen / text / number / mosaic / eraser / undo / more / pin / ocr / translate / long / save / cancel / confirm` 排列；未实现的能力保留槽位但**禁用 + 高亮提示「后续版本」**，不做点了没反应的死按钮。
@@ -39,6 +40,18 @@
   - **翻译**：胶囊第 13 键解禁。先 OCR 再走 `ITranslator`，沿用设置里的 Provider / Key / 源目标语言，结果同样进 `ResultWindow`；Key 型引擎未配 Key 时只在编辑器状态栏提示，不弹空白结果窗。
   - 接线：`TranslateModule` 新增 `RecognizeEditorImageAsync` / `TranslateEditorImageAsync` / `RecognizeBitmapAsync` / `IsTranslatorConfigured`，**复用主实例的 `_ocr` 与 `_translator`**，不新建第二个 200~300MB 引擎；`BitmapSource → PNG → GDI+ Bitmap` 交给 `IOcrProvider.RecognizeAsync`，识别历史照常落库。结果窗与编辑器同为置顶，弹窗前编辑器临时 `Topmost=false`，点回编辑器时由 `Activated` 恢复。
   - 仍为禁用占位：第 1 键「显示鼠标指针」、第 14 键「长截图」（属轮 3，需滚动拼接与新依赖）。
+- **晾衣架一比一复刻（SnowAir-Rack 形态）**：施工草图经批准后一次落地。参照链为 `ScreenCapture-main`（祖宗）→ `SnowAir-main`（图标 / 工具条）→ `CM-idea/SnowAir-Rack`（卡片与主题源码）→ `%APPDATA%\SnowAir\plugin\rack\`（已装插件的素材与数据）。
+  - **形态**：下垂 24px 的贝塞尔吊绳换成**近水平微垂横杆（Sag 6px）+ 左信封（back/front 叠层）+ 右篮子**，与 `theme_0..3.png` 一致。收起态仍把杆压成贴顶 8px 细线。
+  - **4 套主题**：石墨 / 纸白 / 赤陶 / 深海，横杆色、卡片底、外圈、文字、夹子、信封、篮子整套联动；设置页直接显示官方 `theme_N.png` 预览。
+  - **两套卡片模板**：照片卡（白边 + 圆角 + 投影 + 顶部夹子，按图片 `aspect` 调宽）与类型方卡（20% 外圈 + 白底 + 4px 类型色头）。10 种 CardType 枚举与 7 条官方类型色全部保留；WinKit 有数据源的 7 种（图片 / 文本 / 便签 / 链接 / 颜色 / 文件 / 待办）都有入口 —— 左信封按剪贴板内容自动判型（URL→链接、#RRGGBB→颜色、存在的路径→文件、多行→便签），SVG / 录屏 / 视频 / 音乐保留枚举但不产生空卡。
+  - **持久化**：新增 `RackItemStore`，数据落 `%APPDATA%/WinKit/rack_items.json`（`version + items[]`，每条 20 字段，对齐插件）；位图按内容 SHA256 落 `rack_images/<hash>.png`；`hash` 去重、`offsetX` 管重排、`locked` 管固定、上限淘汰最旧的未锁定卡。一次补齐 ROADMAP 的「重启清空 / 不能重排」两个待办。
+  - **交互**：横向拖动改顺序并落盘、纵向拖出到其它应用（一律 COPY）、点击复制、右键锁定 / 解锁 / 移除；两个合并池里点「上绳」才生成卡片。
+  - **设置页新增「晾衣架」分区**（导航倒数第二，前 6 项索引不变）：外观 5 项（主题 / 卡片尺寸 / 横杆 / 信封篮子 / 夹子）、交互 5 项（悬停展开 / 自动收起 / 展开延时 / 收起延时 / 拖动重排）、数据 3 项（持久化 / 数量上限 / 截图后自动挂载），共 **13 项**，另有主题预览图与「清空晾衣架」按钮。改一项存一项，经 `SettingsChanged` 实时推给窗口，无需重启。
+  - **五条铁律全部保留**：8px 热区、600ms 悬停展开、1200ms 离开收起、50ms Win32 坐标轮询、DPI 换算，以及 `_autoHideArmed`（程序挂入的卡片不会被自动收起带走）。
+  - **素材与许可**：`Rack/Assets/` 22 张 PNG 共 1.8MB + `iconfont.ttf` 34KB，以 `Content` 形式随输出目录分发（不嵌进 dll）。插件本体 Apache-2.0；`basket*` / `envelope*` 是 PicRope 的 MIT 衍生品，`Rack/Assets/NOTICE.txt` 已附 MIT 全文与来源说明。
+  - **文本合并语义补做（对齐插件后追加）**：新增 `Rack/RackListPanel.xaml(.cs)`（两个合并池共用一个气泡控件）、`RackItem.FromClipboardText()` 判型工厂、`RackCard.Shake()` 重复反馈、信封 / 篮子条数角标；`RackItemStore.ClearAll()` 改为「只清卡片 + 按引用清理孤儿 PNG」。设置页由 13 项扩到 **14 项**。五条铁律与 8px 热区 / 600ms / 1200ms / 50ms 轮询 / DPI 换算全部保留。
+  - **二次纠错：两个合并池 + 一比一视觉复刻**（用户指出篮子做错成「历史」、样式全靠自绘方块太丑）：篮子改成**待办合并池**（只读 `todos.md`、按标题合并、未完成 / 已完成筛选），`RackHistoryStore.cs` / `rack_history.json` / `RackPanelMode.History` 全部删除；信封补齐图片 / 文件条目并按内容指纹去重。`RackListPanel` 推倒重做为官方 380×550 气泡（顶部 9px 箭头、搜索框、6 个分类 chip、卡片行、20×20 图标按钮、深浅主题），图标改补拷进项目的 `iconfont.ttf`（family name `font_family`，加载失败退回汉字）；`RackCard` 文本 / 便签 / 待办卡改用 `letter.png` 信纸；绳子加金属夹子，信封 / 篮子按素材原比例摆放，删掉自创的深灰空态条与系统默认按钮，角标改主题色小圆。面板高度 250 → 660px（按工作区高度钳制），`SetAnchor()` 让篮子气泡贴右展开。待办池**只读不回写**，避免覆盖待办窗口未保存的改动。五条铁律未动。
+  - 轮 3 大件（长截图 / 录屏 / 二维码 / 水印）按用户指示**暂缓**。
 
 ### Changed 变更
 - 版本号 2.4.0 → **2.4.1**；`WinKit.csproj` / `CHANGELOG` / `latest.json` 三处已对齐，README 快捷键表同步。**三镜像资产待上传**，`latest.json` 的 `note` 保留「待发布」标记，上传完成后删除。

@@ -247,8 +247,14 @@ namespace WinKit.Capture
         {
             try
             {
-                System.Windows.Clipboard.SetImage(ComposeImage());
+                var img = ComposeImage();
+                System.Windows.Clipboard.SetImage(img);
                 SetStatus("已复制到剪贴板");
+
+                // 设置「截图完成后自动挂载」时才额外挂一份；默认关，行为与旧版完全一致。
+                var app = (App)Application.Current;
+                if (app.SettingsManager?.Settings.RackAutoHangCapture == true)
+                    app.RackModule?.HangImage(img);
             }
             catch (Exception ex)
             {

@@ -1,0 +1,45 @@
+basket.png and envelope.png are downscaled derivatives of PicRope's
+basket-classic.png and envelope-classic.png.
+
+PicRope - https://github.com/Renly1994/PicRope
+Copyright (c) PicRope contributors
+Licensed under the MIT License (see the project's LICENSE).
+
+The images are bundled only as UI decoration for the SnowAir rack plugin.
+They are not SnowAir branding and may be replaced by SnowAir-owned artwork.
+
+--------------------------------------------------------------------------
+WinKit redistribution notice
+--------------------------------------------------------------------------
+WinKit (AGPL-3.0) bundles the PNG files in this directory as UI decoration
+for its Rack module. The original files above come from the installed
+SnowAir-Rack plugin (Apache-2.0); basket.png / envelope.png and their
+per-theme variants are MIT-licensed PicRope derivatives, whose license text
+is reproduced below. SnowAir-Rack's own Apache-2.0 notice is retained in
+CHANGELOG.md. No endorsement by either project is implied.
+
+iconfont.ttf is the icon font shipped with the SnowAir-Rack plugin
+(Apache-2.0). WinKit uses its private-use-area glyphs for the clipboard /
+todo bubble action buttons; the font is bundled unmodified as UI content.
+
+MIT License
+
+Copyright (c) PicRope contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in
+all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
