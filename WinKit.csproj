@@ -9,7 +9,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>WinKit</AssemblyName>
     <RootNamespace>WinKit</RootNamespace>
-    <Version>2.4.1</Version>
+    <Version>2.4.2</Version>
     <Authors>WinKit Developer</Authors>
     <Description>统一桌面助手 (TodoList &amp; Clipboard &amp; 本地 OCR 翻译)</Description>
     <ApplicationIcon>PTD.ico</ApplicationIcon>
@@ -46,7 +46,7 @@
       WPF SDK 默认把 **/*.cs 收成 Compile、**/*.xaml 收成 Page：官方 SyncClipboard
       客户端里带 WinUI3 的 App.xaml / Views/*.xaml，一旦被卷进来就会刷一屏 MC3074
       并直接打断构建。DefaultItemExcludes 对所有默认项（含 None / Content）一次性生效，
-      不影响下方 Rack\Assets 的显式 Content Include。
+      显式声明的 Item 不受影响。
     -->
     <DefaultItemExcludes>$(DefaultItemExcludes);ScreenCapture-main\**;SnowAir-main\**;SyncClipboard-master\**;SyncClipboardCfServer-master\**</DefaultItemExcludes>
   </PropertyGroup>
@@ -93,23 +93,6 @@
   -->
   <ItemGroup>
     <None Update="models\**\*.*" CopyToOutputDirectory="PreserveNewest" Visible="false" />
-  </ItemGroup>
-
-  <!--
-    晾衣架主题素材（Rack/Assets，约 1.83MB）：信封 / 篮子 / 4 套主题预览图 /
-    letter.png 信纸卡 / iconfont.ttf 图标字体。
-    以 Content 形式随输出目录分发，而不是嵌进程序集 ——
-    这样主题切换可按文件名直接换图，且第三方素材的 NOTICE.txt 能原样随包保留。
-    许可见 Rack/Assets/NOTICE.txt（Apache-2.0 素材 + PicRope MIT 衍生图）。
-  -->
-  <ItemGroup>
-    <None Remove="Rack\Assets\**\*.png" />
-    <None Remove="Rack\Assets\**\*.ttf" />
-    <Resource Remove="Rack\Assets\**\*.png" />
-    <Resource Remove="Rack\Assets\**\*.ttf" />
-    <Content Include="Rack\Assets\**\*.png" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="Rack\Assets\**\*.ttf" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="Rack\Assets\NOTICE.txt" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <!-- 缺少模型会导致应用启动后 OCR 完全不可用，这里在构建期直接拦截 -->

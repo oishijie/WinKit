@@ -42,7 +42,6 @@ namespace WinKit
         private ToastService? _toastService;
         private TranslateModule? _translateModule;
         private CaptureModule? _captureModule;
-        private Rack.RackModule? _rackModule;
         private SettingsWindow? _settingsWindow;
 
         /// <summary>
@@ -70,7 +69,6 @@ namespace WinKit
         public SettingsManager? SettingsManager => _settingsManager;
         public TranslateModule? TranslateModule => _translateModule;
         public CaptureModule? CaptureModule => _captureModule;
-        public Rack.RackModule? RackModule => _rackModule;
 
         /// <summary>
         /// UI 线程未处理异常的全局兜底。
@@ -218,10 +216,6 @@ namespace WinKit
             //     独立于翻译与剪贴板：翻译模块被关掉也照样能截图。
             _captureModule = new CaptureModule(_settingsManager);
             _captureModule.Start();
-
-            // 6.1.0 初始化晾衣架模块（置顶聚合面板）。
-            //     惰性创建窗口，由托盘菜单开关；数据源复用剪贴板 / 待办。
-            _rackModule = new Rack.RackModule(_settingsManager, _clipboardManager);
 
             // 6.1.1 订阅注册失败上报。放在 Start 之后是有意的：
             //       启动阶段若有键被别的软件占用，静默记日志即可，不打扰用户；
@@ -1061,7 +1055,6 @@ namespace WinKit
             _pushOnlyEngine?.Dispose();
             _translateModule?.Dispose();
             _captureModule?.Dispose();
-            _rackModule?.Dispose();
             _keyboardHookService?.Dispose();
             _topLevelHotkeys?.Dispose();
             _clipboardService?.Dispose();

@@ -1,10 +1,10 @@
 {
-  "tag": "v2.4.1",
-  "version": "2.4.1",
+  "tag": "v2.4.2",
+  "version": "2.4.2",
   "publishedAt": "2026-11-08",
-  "zip": "WinKit-v2.4.1-win-x64.zip",
-  "downloadUrl": "https://gitee.com/worhllo/WinKit/releases/download/v2.4.1/WinKit-v2.4.1-win-x64.zip",
-  "mirror": "https://github.com/oishijie/WinKit/releases/download/v2.4.1/WinKit-v2.4.1-win-x64.zip",
-  "cnb": "https://cnb.cool/wordoi.rlc/winkit-customer/-/releases/download/v2.4.1/WinKit-v2.4.1-win-x64.zip",
-  "note": "WinKit 发布镜像清单（供人或脚本取用，程序自动更新不读取本文件：版本探测走 Gitee API + GitHub 302，下载时对 Gitee/GitHub/CNB 三镜像并发测速选最快）。CNB 的 release API 与 git/raw 文件接口匿名一律 401，故不能作为公开探测源。v2.4.1 三镜像资产已于 2026-11-08 上传完成，三处匿名下载均验证可用；分发包 SHA256 6C5E72C9E15882670FB97B155A37A20C5878F924F8A3BB3F73A5FBC580B57AD4。发新版本时同步更新本文件并推送仓库。"
+  "zip": "WinKit-v2.4.2-win-x64.zip",
+  "downloadUrl": "https://gitee.com/worhllo/WinKit/releases/download/v2.4.2/WinKit-v2.4.2-win-x64.zip",
+  "mirror": "https://github.com/oishijie/WinKit/releases/download/v2.4.2/WinKit-v2.4.2-win-x64.zip",
+  "cnb": "https://cnb.cool/wordoi.rlc/winkit-customer/-/releases/download/v2.4.2/WinKit-v2.4.2-win-x64.zip",
+  "note": "WinKit 发布镜像清单（供人或脚本取用，程序自动更新不读取本文件：版本探测走 Gitee API + GitHub 302，下载时对 Gitee/GitHub/CNB 三镜像并发测速选最快）。CNB 的 release API 与 git/raw 文件接口匿名一律 401，故不能作为公开探测源。v2.4.2 移除晾衣架（Rack）整体功能，三镜像资产于 2026-11-08 上传；分发包 SHA256 09BBF2C4E3B79F469812C2D689B213BD2AC4BF712C9EE7E9DD30AE84B0B90B1A。发新版本时同步更新本文件并推送仓库。"
 }

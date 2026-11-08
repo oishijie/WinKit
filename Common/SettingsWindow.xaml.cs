@@ -1,21 +1,18 @@
 using System;
 using System.Diagnostics;
-using System.IO;
 using System.Reflection;
 using System.Text.RegularExpressions;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using WinKit.Rack;
 using WinKit.Translate.Models;
 using WinKit.Translate.Services;
 
 namespace WinKit.Common
 {
     /// <summary>
-    /// 统一设置中心 — 八个分区：通用 / 待办 / 剪贴板 / 同步 / 截图 / 翻译与 OCR / 晾衣架 / 关于。
+    /// 统一设置中心 — 七个分区：通用 / 待办 / 剪贴板 / 同步 / 截图 / 翻译与 OCR / 关于。
     ///
     /// 交互约定（对标 SnapFind 控制中心，但更轻）：
     ///   · 改一项存一项、即时生效，没有「保存 / 取消」按钮；
@@ -31,7 +28,6 @@ namespace WinKit.Common
         public const string SectionSync = "sync";
         public const string SectionCapture = "capture";
         public const string SectionTranslate = "translate";
-        public const string SectionRack = "rack";
         public const string SectionAbout = "about";
 
         private static readonly Regex DigitsOnly = new(@"^[0-9]+$", RegexOptions.Compiled);
@@ -102,8 +98,7 @@ namespace WinKit.Common
                     SectionSync => 3,
                     SectionCapture => 4,
                     SectionTranslate => 5,
-                    SectionRack => 6,
-                    SectionAbout => 7,
+                    SectionAbout => 6,
                     _ => 0,
                 };
             }
@@ -218,25 +213,7 @@ namespace WinKit.Common
                 TranslateCard.IsEnabled = s.TranslateEnable;
                 OcrCard.IsEnabled = s.TranslateEnable;
 
-                // ⑥ 晾衣架（13 项）
-                SelectByTag(RackThemeCombo, s.RackTheme, "graphite");
-                UpdateRackPreview(s.RackTheme);
-                SelectByTag(RackScaleCombo, s.RackCardScale, "medium");
-                RackShowRopeToggle.IsChecked = s.RackShowRope;
-                RackShowDecorToggle.IsChecked = s.RackShowDecor;
-                RackShowClipToggle.IsChecked = s.RackShowClip;
-                RackHoverExpandToggle.IsChecked = s.RackHoverExpand;
-                RackAutoHideToggle.IsChecked = s.RackAutoHide;
-                SelectByTag(RackHoverDelayCombo, s.RackHoverDelayMs.ToString(), "600");
-                SelectByTag(RackAutoHideDelayCombo, s.RackAutoHideMs.ToString(), "1200");
-                RackEnableReorderToggle.IsChecked = s.RackEnableReorder;
-                RackPersistToggle.IsChecked = s.RackPersistItems;
-                RackMaxItemsBox.Text = Clamp(s.RackMaxItems, 5, 60).ToString();
-                RackAutoHangCaptureToggle.IsChecked = s.RackAutoHangCapture;
-                RackAutoHangTextToggle.IsChecked = s.RackAutoHangText;
-                UpdateRackCount();
-
-                // ⑦ 关于
+                // ⑥ 关于
                 var version = Assembly.GetExecutingAssembly().GetName().Version;
                 VersionText.Text = version != null ? $"v{version.ToString(3)}" : "v1.0.0";
                 RefreshOcrStatus();
@@ -637,14 +614,12 @@ namespace WinKit.Common
             PageSync.Visibility = index == 3 ? Visibility.Visible : Visibility.Collapsed;
             PageCapture.Visibility = index == 4 ? Visibility.Visible : Visibility.Collapsed;
             PageTranslate.Visibility = index == 5 ? Visibility.Visible : Visibility.Collapsed;
-            PageRack.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
-            PageAbout.Visibility = index == 7 ? Visibility.Visible : Visibility.Collapsed;
+            PageAbout.Visibility = index == 6 ? Visibility.Visible : Visibility.Collapsed;
 
             if (index == 2) { UpdateClipCount(); UpdateImageUsage(); }
             if (index == 3) SyncStatusText.Text = CurrentApp?.GetSyncStatusText() ?? "未知";
             if (index == 5) RefreshOcrHistory();   // 识别历史按需重建，避免每次改设置都全量查询
-            if (index == 6) { UpdateRackPreview(_settingsManager.Settings.RackTheme); UpdateRackCount(); }
-            if (index == 7) RefreshOcrStatus();
+            if (index == 6) RefreshOcrStatus();
         }
 
         private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -1486,153 +1461,6 @@ namespace WinKit.Common
             {
                 System.Windows.MessageBox.Show($"无法打开链接: {ex.Message}", "WinKit",
                     MessageBoxButton.OK, MessageBoxImage.Warning);
-            }
-        }
-
-        // ══════════════════════════════════════════════
-        //  ⑦ 晾衣架（13 项，改一项存一项，SettingsChanged 驱动窗口热更新）
-        // ══════════════════════════════════════════════
-
-        private void RackThemeCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suspend) return;
-            var tag = SelectedTag(RackThemeCombo);
-            if (tag == null) return;
-            _settingsManager.Settings.RackTheme = tag;
-            UpdateRackPreview(tag);
-            Save();
-        }
-
-        private void RackScaleCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suspend) return;
-            var tag = SelectedTag(RackScaleCombo);
-            if (tag == null) return;
-            _settingsManager.Settings.RackCardScale = tag;
-            Save();
-        }
-
-        private void RackShowRopeToggle_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.RackShowRope = RackShowRopeToggle.IsChecked == true;
-            Save();
-        }
-
-        private void RackShowDecorToggle_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.RackShowDecor = RackShowDecorToggle.IsChecked == true;
-            Save();
-        }
-
-        private void RackShowClipToggle_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.RackShowClip = RackShowClipToggle.IsChecked == true;
-            Save();
-        }
-
-        private void RackHoverExpandToggle_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.RackHoverExpand = RackHoverExpandToggle.IsChecked == true;
-            Save();
-        }
-
-        private void RackAutoHideToggle_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.RackAutoHide = RackAutoHideToggle.IsChecked == true;
-            Save();
-        }
-
-        private void RackHoverDelayCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suspend) return;
-            var tag = SelectedTag(RackHoverDelayCombo);
-            if (tag == null || !int.TryParse(tag, out var ms)) return;
-            _settingsManager.Settings.RackHoverDelayMs = ms;
-            Save();
-        }
-
-        private void RackAutoHideDelayCombo_Changed(object sender, SelectionChangedEventArgs e)
-        {
-            if (_suspend) return;
-            var tag = SelectedTag(RackAutoHideDelayCombo);
-            if (tag == null || !int.TryParse(tag, out var ms)) return;
-            _settingsManager.Settings.RackAutoHideMs = ms;
-            Save();
-        }
-
-        private void RackEnableReorderToggle_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.RackEnableReorder = RackEnableReorderToggle.IsChecked == true;
-            Save();
-        }
-
-        private void RackPersistToggle_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.RackPersistItems = RackPersistToggle.IsChecked == true;
-            Save();
-        }
-
-        private void RackMaxItemsBox_Commit(object sender, RoutedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.RackMaxItems =
-                CommitNumber(RackMaxItemsBox, _settingsManager.Settings.RackMaxItems, 5, 60);
-            Save();
-        }
-
-        private void RackAutoHangCaptureToggle_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.RackAutoHangCapture = RackAutoHangCaptureToggle.IsChecked == true;
-            Save();
-        }
-
-        private void RackAutoHangTextToggle_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suspend) return;
-            _settingsManager.Settings.RackAutoHangText = RackAutoHangTextToggle.IsChecked == true;
-            Save();
-        }
-
-        private void RackClearBtn_Click(object sender, RoutedEventArgs e)
-        {
-            if (_suspend) return;
-            CurrentApp?.RackModule?.ClearAll();
-            UpdateRackCount();
-        }
-
-        private void UpdateRackCount()
-        {
-            RackCountText.Text = $"当前 {RackItemStore.CountFast()} 张卡片（落盘）；剪贴板 / 待办数据不受影响";
-        }
-
-        /// <summary>主题预览直接用插件自带的 theme_N.png，找不到就留空，不让设置窗崩。</summary>
-        private void UpdateRackPreview(string? key)
-        {
-            var theme = RackTheme.Get(RackTheme.IndexOf(key));
-            RackThemeHint.Text = $"{theme.Name} · {(theme.IsDark ? "深色" : "浅色")}卡片 · 素材 {theme.PreviewAsset}";
-            try
-            {
-                var path = RackTheme.AssetPath(theme.PreviewAsset);
-                if (!File.Exists(path)) { RackThemePreview.Source = null; return; }
-                var bmp = new BitmapImage();
-                bmp.BeginInit();
-                bmp.CacheOption = BitmapCacheOption.OnLoad;
-                bmp.UriSource = new Uri(path, UriKind.Absolute);
-                bmp.EndInit();
-                bmp.Freeze();
-                RackThemePreview.Source = bmp;
-            }
-            catch
-            {
-                RackThemePreview.Source = null;
             }
         }
 

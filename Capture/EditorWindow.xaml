@@ -307,9 +307,6 @@
                                 Tag="{StaticResource CapIconRedo}"
                                 IsEnabled="False"
                                 Click="RedoBtn_Click" ToolTip="重做 (Ctrl+Y)"/>
-                        <Button x:Name="BtnRack" Style="{StaticResource CapActionBtn}"
-                                Tag="{StaticResource CapIconRack}"
-                                Click="RackBtn_Click" ToolTip="挂到晾衣架"/>
                         <RadioButton x:Name="ToolHighlight" GroupName="Tool" Style="{StaticResource CapToolBtn}"
                                      Tag="{StaticResource CapIconHighlight}" CommandParameter="Highlight"
                                      Checked="Tool_Checked" ToolTip="聚焦高亮：拖框，框外压暗 55%"/>

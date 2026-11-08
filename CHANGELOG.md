@@ -3,6 +3,11 @@
 统一桌面助手：TodoList + Clipboard + 截图标注 + 本地 OCR 翻译。
 格式参照 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/)；版本号见 `WinKit.csproj` 的 `<Version>`。
 
+## [2.4.2] — 2026-11-08
+
+### Removed 移除
+- **晾衣架（Rack）整体移除**：删除 `Rack/` 全部源码与素材、托盘入口、截图编辑器「挂衣架」按钮、设置页「晾衣架」分区及 14 项设置、`AppPaths` / `AppSettings` 中的相关字段与 `csproj` 的 `Content` 规则。历史条目保留在下方 2.4.1 段落中，仅作记录，功能已不存在；重做计划与失败复盘已记入 `ROADMAP.md` 中期段。设置中心由 8 个分区回到 7 个，产物去掉约 1.83MB 主题素材。
+
 ## [2.4.1] — 2026-11-07
 
 ### Fixed 修复

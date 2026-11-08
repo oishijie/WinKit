@@ -58,7 +58,6 @@ namespace WinKit.Common
         private readonly MenuItem _itemTodoSwitch; // 显示 / 隐藏待办（文字随窗口状态动态切换）
         private readonly MenuItem _itemHistory;    // 待办历史（回收站）
         private readonly MenuItem _itemPaste;      // 剪贴板历史
-        private readonly MenuItem _itemRack;       // 晾衣架
         private readonly MenuItem _itemSync;       // 剪贴板同步开关（SyncClipboard 协议）
         private readonly MenuItem _itemSettings;   // 设置
         private readonly MenuItem _itemExit;       // 退出
@@ -114,10 +113,6 @@ namespace WinKit.Common
             _itemPaste = new MenuItem { Header = "剪贴板历史" };
             _itemPaste.Click += (s, e) => ShowPasteWindow();
 
-            // ── 4.25 晾衣架 ────────────────────────────────
-            _itemRack = new MenuItem { Header = "晾衣架" };
-            _itemRack.Click += (s, e) => (_app as App)?.RackModule?.Toggle();
-
             // ── 4.5 剪贴板同步开关（SyncClipboard 协议）────────
             _itemSync = new MenuItem { Header = "剪贴板同步", IsCheckable = true };
             _itemSync.IsChecked = _settingsManager.Settings.SyncEnabled;
@@ -140,7 +135,6 @@ namespace WinKit.Common
             _contextMenu.Items.Add(_itemTodoSwitch);
             _contextMenu.Items.Add(_itemHistory);
             _contextMenu.Items.Add(_itemPaste);
-            _contextMenu.Items.Add(_itemRack);
             _contextMenu.Items.Add(_itemSync);
             _contextMenu.Items.Add(new Separator());
             _contextMenu.Items.Add(_itemSettings);
@@ -265,7 +259,6 @@ namespace WinKit.Common
         private void SyncMenuStates()
         {
             _itemTodoSwitch.Header = _todoWindow.IsVisible ? "隐藏待办" : "显示待办";
-            _itemRack.Header = (_app as App)?.RackModule?.IsActive == true ? "收起晾衣架" : "晾衣架";
             _itemPaste.IsEnabled = _settingsManager.Settings.PasteEnableMonitoring;
             _itemSync.IsChecked = _settingsManager.Settings.SyncEnabled;
         }

@@ -250,11 +250,6 @@ namespace WinKit.Capture
                 var img = ComposeImage();
                 System.Windows.Clipboard.SetImage(img);
                 SetStatus("已复制到剪贴板");
-
-                // 设置「截图完成后自动挂载」时才额外挂一份；默认关，行为与旧版完全一致。
-                var app = (App)Application.Current;
-                if (app.SettingsManager?.Settings.RackAutoHangCapture == true)
-                    app.RackModule?.HangImage(img);
             }
             catch (Exception ex)
             {
@@ -268,15 +263,6 @@ namespace WinKit.Capture
             var img = ComposeImage();
             var pin = new PinWindow(img);
             pin.Show();
-            Close();
-        }
-
-        private void RackBtn_Click(object sender, RoutedEventArgs e)
-        {
-            // 挂衣架：把当前合成结果挂到晾衣架，然后关闭编辑器
-            var img = ComposeImage();
-            var app = (App)Application.Current;
-            app.RackModule?.HangImage(img);
             Close();
         }
 

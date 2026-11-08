@@ -46,17 +46,6 @@ namespace WinKit.Common
         public static readonly string Settings = Path.Combine(AppData, "settings.json");
 
         /// <summary>
-        /// 晾衣架卡片数据（rack_items.json）。结构对齐 SnowAir-Rack 插件：version + items[]。
-        /// </summary>
-        public static readonly string RackItems = Path.Combine(AppData, "rack_items.json");
-
-        /// <summary>
-        /// 晾衣架图片卡的图片缓存目录（%APPDATA%/WinKit/rack_images/）。
-        /// 位图不能塞进 JSON，按内容 hash 落成独立 PNG，JSON 里只存文件名。
-        /// </summary>
-        public static readonly string RackImages = Path.Combine(AppData, "rack_images");
-
-        /// <summary>
         /// 键盘钩子与热键日志路径
         /// </summary>
         public static readonly string HotKeyLog = Path.Combine(AppData, "hotkey.log");
@@ -77,10 +66,6 @@ namespace WinKit.Common
             if (!Directory.Exists(SyncDir))
             {
                 Directory.CreateDirectory(SyncDir);
-            }
-            if (!Directory.Exists(RackImages))
-            {
-                Directory.CreateDirectory(RackImages);
             }
         }
     }

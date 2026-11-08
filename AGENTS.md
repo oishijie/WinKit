@@ -6,7 +6,7 @@
 - 还原并构建：`dotnet restore` → `dotnet build -c Release`（输出 `bin/Release/net8.0-windows/`）。
 - 本地 OCR 依赖 `RapidOcrNet`（ONNX Runtime）；模型随仓库放在 `models/`（PP-OCRv6，约 37MB），**必须先 `dotnet restore`**，否则 `VerifyLocalOcrModels` 构建目标报错。
 - 无头跑 `dotnet WinKit.dll` 可抓启动期托管异常（GUI 崩溃在桌面上只表现为「打不开」）。
-- **提交前门禁（必跑）**：`powershell -ExecutionPolicy Bypass -File tools\preflight.ps1`。自动检查 SDK / restore / 0 错误 0 警告 / 核心 7 件套 / `models/` 7 文件 / 无 `runtimes/` / 产物体积 / 版本一致性共 10 项，退出码非 0 不许提交；`docs/local-preflight-checklist.md` 是配套的人工冒烟 13 项与发版清单。为什么要有这道门禁：`Rack/` 曾带着三处编译错误进仓库且从未进过任何可运行版本，v2.4.0 / v2.3.3 的严重缺陷也都是编译期 0 错误 0 警告。**纯本机按需执行，不接入任何远程自动化服务**；改了 TFM / RID / 模型清单 / 版本号时同步更新脚本里的常量。
+- **提交前门禁（必跑）**：`powershell -ExecutionPolicy Bypass -File tools\preflight.ps1`。自动检查 SDK / restore / 0 错误 0 警告 / 核心 7 件套 / `models/` 7 文件 / 无 `runtimes/` / 产物体积 / 版本一致性共 10 项，退出码非 0 不许提交；`docs/local-preflight-checklist.md` 是配套的人工冒烟 11 项与发版清单。为什么要有这道门禁：v2.4.0 / v2.3.3 的严重缺陷都是编译期 0 错误 0 警告，静态检查抓不到运行时问题。**纯本机按需执行，不接入任何远程自动化服务**；改了 TFM / RID / 模型清单 / 版本号时同步更新脚本里的常量。
 
 ## 技术栈
 - net8.0-windows、x64（**ONNX Runtime 原生库仅提供 x64，进程锁定 x64**）、WPF + WinForms 混合。
@@ -75,14 +75,6 @@
   - `TextBlocks` / `BoxPoints` 是**数组**，用 `.Length`（写 `.Count` 会被解析成 LINQ 扩展方法，报 `CS0019`）。
   - `RapidOcr` 只接受 `SKBitmap`，`Bitmap → SKBitmap` 走逐行 `Marshal.Copy`，因此 `Prepare` 输出为 **32bpp**（`Bgra8888` + `Opaque` 是唯一无需二次转换的匹配格式）。
   - **字典文件名是 `PP-OCRv6_*_dict.txt`（大写 PP）**，与官方预设要求的 `ppocrv6_*_dict.txt` 不一致。目前路径全部由 `OcrModelCatalog.Resolve` 显式传入所以没事；将来若改用 `RapidOcrModelSet` 预设，必须先把文件名改小写，否则会报「模型在目录里却显示缺失」。
-
-- **晾衣架 `Rack/`（2026-11-07 按 SnowAir-Rack 源码修正语义）**：`RackModule` 是被动容器（`HangImage` / `HangText` / `HangTodo`），`RackWindow` 是贴屏幕顶端的置顶透明分层窗口，近水平微垂横杆 + 左信封 + 右篮子。改这块前必读下面五条（① 是行为语义，②–⑤ 是技术铁律）：
-  ① **两个合并池，文本与待办绝不逐条上绳**：`Plugin.cpp:90` 只有 `OnCapture(path)`（截图）自动上绳；`ClipboardBubble.cpp:329–393` 按 `EntryContentKey` 把复制过的内容合并去重成气泡列表，用户点「挂到绳子上」才生成卡。**`RackModule.LoadFromSources()` 已删除，别再加回来**；信封＝`RackListPanel` 的剪贴板模式，篮子＝待办模式（只读 `todos.md`，按标题合并，不回写以免覆盖待办窗口的内存列表）。**没有 `rack_history.json` / `RackHistoryStore` / `RackPanelMode.History`** —— 取下卡片只从绳上移除，内容仍在各自数据源里。设置「复制文本自动上绳」默认关，是唯一允许文本自动上绳的开关；首次打开只恢复 `rack_items.json`，空架是正常状态。
-  ② **自动收起必须「武装」**：`_autoHideArmed` 只有在鼠标真正进过展开窗口时才置 true，离开 `AutoHideMs` 后才 `CollapseToTop()`。程序侧 Hang 时鼠标通常还在编辑器 / 别的应用里，若也走自动收起，卡片 1.2 秒后一闪消失 —— 这正是「挂了没反应」的观感来源。所有入口统一走 `RackWindow.Reveal()`（Show + Expand + 解除武装）。
-  ③ **鼠标坐标必须换算 DIP**：`Control.MousePosition` 是物理像素，`Left / Top / Width / Height` 是 WPF DIP，要经 `PresentationSource.FromVisual(this).CompositionTarget.TransformFromDevice` 变换。混用会让 125% / 150% 缩放下顶部 8px 热区永远命中不了，悬停展开也就不触发。
-  ④ **逻辑显隐看 `IsExpanded`，不看 `Window.IsVisible`**：自动收起后窗口仍以 8px 热区存在，`IsVisible` 仍为 true；托盘文案（`RackModule.IsActive`）与 `Toggle()` 判定都走 `IsExpanded`，收起统一调 `Dismiss()`（Collapse + Hide）。否则自动收起后点菜单只会 Hide，要点两次才展开。
-  ⑤ **透明分层窗口 `Background` 恒为 `null`**、`RopePath.IsHitTestVisible="False"`：空白区域点击穿透到下层应用，热区靠 Win32 坐标轮询而非 WPF 命中测试；收起态把绳子压成贴顶细线作为「还在」的视觉反馈。窗口 `Closed` 要停掉 50ms 的 `DispatcherTimer`。
-  ⑥ **主体视觉必须复用现成素材，别再自绘方块**：`Rack/Assets/` 22 张 PNG + `iconfont.ttf` 以 `Content` 随输出目录分发，信封 back/front 分层、篮子、4 套主题预览、信纸卡背景全部按文件路径加载；改这块前先确认输出目录 `Rack\Assets\` 里文件齐全。气泡本身官方也是几何绘制（没有 PNG），规格固定 **380×550 / 圆角 16 / 顶部 9px 箭头 / 搜索框 32 / 分类 chip 28 / 卡片圆角 8 / 图标按钮 20×20**；图标字体内部 family name 是 `font_family`，codepoint `0xE647` 复制 / `0xE612` 上绳 / `0xE65B` 删除 / `0xE66D` 分类，加载失败自动退回汉字。面板打开时窗口高度 250→660px（按工作区高度钳制），`SetAnchor()` 决定靠左（信封）还是靠右（篮子）与箭头位置。
 
 ## 当前状态与下一步
 - v2.1.0：快捷键 UI 可配置、剪贴板图片支持 + 截图功能、OCR 模型热切换、DPAPI 加密、Pin 钉住、SQLite 连接优化、**单实例保护（Mutex + 唤醒已有实例）**、**剪贴板图片内容级去重（像素哈希）**、**Todo 完成态持久化（`- [x]` 任务列表格式 + 双击已完成删除）**。
