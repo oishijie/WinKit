@@ -40,6 +40,15 @@
     <DebugType>embedded</DebugType>
     <DebugSymbols>false</DebugSymbols>
     <Optimize>true</Optimize>
+
+    <!--
+      ⚠ 本地第三方参考源码副本（调研用，已在 .gitignore 排除）绝不参与编译。
+      WPF SDK 默认把 **/*.cs 收成 Compile、**/*.xaml 收成 Page：官方 SyncClipboard
+      客户端里带 WinUI3 的 App.xaml / Views/*.xaml，一旦被卷进来就会刷一屏 MC3074
+      并直接打断构建。DefaultItemExcludes 对所有默认项（含 None / Content）一次性生效，
+      不影响下方 Rack\Assets 的显式 Content Include。
+    -->
+    <DefaultItemExcludes>$(DefaultItemExcludes);ScreenCapture-main\**;SnowAir-main\**;SyncClipboard-master\**;SyncClipboardCfServer-master\**</DefaultItemExcludes>
   </PropertyGroup>
 
   <PropertyGroup>

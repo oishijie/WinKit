@@ -4,6 +4,7 @@ using System.Collections.Specialized;
 using System.IO;
 using System.IO.Compression;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
@@ -24,11 +25,22 @@ namespace WinKit.Clipboard.Services
     /// - 防回环：推/拉各自记录内容 hash；拉取产生的历史条目以 Id 守门，杜绝图片重编码导致的误推回
     /// - hash 官方格式：文本 SHA256(UTF8)；图片/文件 SHA256("文件名|" + 大写hex(内容SHA256))，均大写十六进制
     /// - 图片/文件为两步上传：先 PUT file/{dataName} 再 PUT SyncClipboard.json 换指针
+    /// - 对齐官方 3.3.0：>10240 字符的文本走外置 .txt（profile.text 只留前缀），拉取侧必须下载全文
+    /// - Group 支持文件夹顶层条目，每级子目录都要写显式目录条目并计入 entries hash
     /// - 类型开关 / 大小上限 / 文件黑名单均可配（AppSettings）
     /// </summary>
     public class SyncEngine : IDisposable
     {
         private static readonly JsonSerializerOptions JsonOpts = new(JsonSerializerDefaults.Web);
+
+        /// <summary>
+        /// 官方 TextProfile.TRANSFER_DATA_THRESHOLD：超过这个长度，profile.text 只放前缀，
+        /// 全文另存外置 .txt（hasData=true）。WinKit 推 / 拉两侧必须共用同一个阈值。
+        /// </summary>
+        private const int TextTransferDataThreshold = 10240;
+
+        /// <summary>服务端认证失败限速窗口：15 分钟内 10 次 401 会锁 IP 15 分钟。</summary>
+        private const int AuthBlockMinutes = 15;
 
         private readonly HttpClient _http;
         private readonly ClipboardManager _clipboardManager;
@@ -52,6 +64,9 @@ namespace WinKit.Clipboard.Services
         private string? _lastPushedContentHash; // 图片/文件防重推：与文件名无关的内容 hash
         private string? _lastRemoteHash;      // 远端当前 hash（拉取侧去重）
         private Guid _lastPulledItemId;       // 拉取产生的历史条目（图片重编码后字节变化，hash 守不住，用 Id）
+
+        /// <summary>最近一次 401/403 之后的静默截止时间（在此之前不再发请求，避免撞服务端 IP 封锁）。</summary>
+        private DateTime? _authBlockedUntil;
 
         private CancellationTokenSource? _cts;
 
@@ -113,13 +128,41 @@ namespace WinKit.Clipboard.Services
                 // 每轮读取间隔，设置页改完即时生效；连续失败后指数退避（封顶 60s）
                 int interval = (int)(Math.Max(1000, _settingsManager.Settings.SyncIntervalMs) * BackoffMultiplier);
                 interval = Math.Min(interval, 60_000);
+
+                // 认证被拒时不能继续 5s 轮询：新版服务端 15 分钟内累计 10 次 401 会把 IP 锁 15 分钟，
+                // 密码 / 地址配错时轮询几十秒就能撞满。直接静默等到窗口过去；用户显式 Nudge
+                // 或改配置触发 RestartSyncEngine() 都能提前解除。
+                if (_authBlockedUntil is { } until && until > DateTime.Now)
+                {
+                    LastError = $"认证失败（401/403），已暂停同步至 {until:HH:mm:ss}；请检查地址 / 用户名 / 密码";
+                    ConsecutiveFailures++;
+                    var remaining = (int)Math.Min(int.MaxValue, (until - DateTime.Now).TotalMilliseconds + 500);
+                    try
+                    {
+                        await Task.WhenAny(Task.Delay(remaining, ct), nudge).ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) { break; }
+                    continue;
+                }
+
                 try
                 {
                     await PullAsync(ct).ConfigureAwait(false);
-                    await PushAsync(ct).ConfigureAwait(false);
-                    ConsecutiveFailures = 0;
-                    LastError = null;
-                    LastSuccessAt = DateTime.Now;
+                    // 本轮拉 / 推任何一步撞到 401/403 都不再继续发请求，且不能按「成功」清标记
+                    if (_authBlockedUntil is null)
+                        await PushAsync(ct).ConfigureAwait(false);
+
+                    if (_authBlockedUntil is null)
+                    {
+                        ConsecutiveFailures = 0;
+                        LastError = null;
+                        LastSuccessAt = DateTime.Now;
+                    }
+                    else
+                    {
+                        ConsecutiveFailures++;
+                        LastError = "认证失败（401/403），已暂停同步；请检查地址 / 用户名 / 密码";
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -140,6 +183,8 @@ namespace WinKit.Clipboard.Services
         /// <summary>立即触发一轮推 / 拉（右键推送后调用，省掉最多一个轮询间隔的等待）</summary>
         public void Nudge()
         {
+            // 显式动作视为「用户可能刚改好配置」，提前解除认证静默期
+            _authBlockedUntil = null;
             _nudgeTcs?.TrySetResult(true);
         }
 
@@ -151,6 +196,7 @@ namespace WinKit.Clipboard.Services
         {
             var s = _settingsManager.Settings;
             using var resp = await _http.GetAsync(BuildUrl("SyncClipboard.json"), ct).ConfigureAwait(false);
+            if (IsAuthFailure(resp.StatusCode)) { RegisterAuthFailure(); return; }
             if (!resp.IsSuccessStatusCode) return; // 404 = 远端为空，交给上传环
 
             var json = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
@@ -189,6 +235,39 @@ namespace WinKit.Clipboard.Services
         private async Task PullTextAsync(SyncClipboardProfile profile, CancellationToken ct)
         {
             var text = profile.Text ?? string.Empty;
+
+            // 3.3.0 大文本语义：>10240 字符时 profile.text 只是前 10240 字符的**前缀**，
+            // 全文在外置 .txt 里。只读前缀会把残缺文本写进剪贴板，防回环标记又对不上，
+            // 下一轮还可能把这份残缺内容推回去覆盖全网 —— 必须下载全文。
+            if (profile.HasData)
+            {
+                if (string.IsNullOrEmpty(profile.DataName)) { _lastRemoteHash = profile.Hash; return; }
+
+                byte[] bytes;
+                try
+                {
+                    bytes = await _http.GetByteArrayAsync(
+                        BuildUrl($"file/{Uri.EscapeDataString(profile.DataName)}"), ct).ConfigureAwait(false);
+                }
+                catch
+                {
+                    return; // 下载失败不记标记，下轮重试
+                }
+
+                // 官方 TextProfile：hash == transferDataHash == SHA256(全文 UTF-8 字节)
+                var contentHash = ComputeContentHash(bytes);
+                if ((!string.IsNullOrEmpty(profile.TransferDataHash) &&
+                     !profile.TransferDataHash.Equals(contentHash, StringComparison.OrdinalIgnoreCase)) ||
+                    (!string.IsNullOrEmpty(profile.Hash) &&
+                     !profile.Hash.Equals(contentHash, StringComparison.OrdinalIgnoreCase)))
+                {
+                    _lastRemoteHash = profile.Hash; // 数据不完整 / 被截断，放弃本轮
+                    return;
+                }
+
+                text = Encoding.UTF8.GetString(bytes);
+            }
+
             if (text.Length == 0) { _lastRemoteHash = profile.Hash; return; }
 
             var official = ComputeTextHash(text);
@@ -467,13 +546,37 @@ namespace WinKit.Clipboard.Services
             var hash = ComputeTextHash(text);
             if (hash == _lastPushedHash || hash == _lastPulledHash) return; // 无新内容
 
-            var profile = new SyncClipboardProfile
+            SyncClipboardProfile profile;
+            if (text.Length <= TextTransferDataThreshold)
             {
-                Type = "Text",
-                Text = text,
-                HasData = false,
-                Hash = hash
-            };
+                profile = new SyncClipboardProfile
+                {
+                    Type = "Text",
+                    Text = text,
+                    HasData = false,
+                    Hash = hash
+                };
+            }
+            else
+            {
+                // 对齐官方 TextProfile：hash = SHA256(全文 UTF-8 字节)，text = 前 10240 字符前缀，
+                // 全文走外置文件。否则长文本全塞进 JSON，既不对称也有请求体上限风险。
+                var dataName = $"Text_{DateTime.Now:yyyyMMddHHmmssfff}.txt";
+                if (!await UploadDataAsync(dataName, Encoding.UTF8.GetBytes(text), ct).ConfigureAwait(false))
+                    return;
+
+                profile = new SyncClipboardProfile
+                {
+                    Type = "Text",
+                    Text = text[..TextTransferDataThreshold],
+                    HasData = true,
+                    DataName = dataName,
+                    TransferDataHash = hash,
+                    Hash = hash,
+                    Size = text.Length
+                };
+            }
+
             if (await PutProfileAsync(profile, ct).ConfigureAwait(false))
             {
                 _lastPushedHash = hash;
@@ -597,6 +700,7 @@ namespace WinKit.Clipboard.Services
                 using var content = new StreamContent(fs);
                 using var resp = await _http.PutAsync(
                     BuildUrl($"file/{Uri.EscapeDataString(name)}"), content, ct).ConfigureAwait(false);
+                if (IsAuthFailure(resp.StatusCode)) { RegisterAuthFailure(); return; }
                 if (!resp.IsSuccessStatusCode) return;
             }
             catch { return; }
@@ -643,9 +747,16 @@ namespace WinKit.Clipboard.Services
         /// </summary>
         public void PushGroupNow(IReadOnlyList<string> files)
         {
-            var valid = files.Where(File.Exists).ToList();
+            // 官方 GroupProfile 允许文件夹作为顶层条目；早期版本只留 File.Exists，
+            // 会把右键选中的整个目录静默丢掉。
+            var valid = files
+                .Where(p => !string.IsNullOrWhiteSpace(p) && (File.Exists(p) || Directory.Exists(p)))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
             if (valid.Count == 0) return;
-            if (valid.Count == 1) { PushFileNow(valid[0]); return; }
+            // 单个目录不能降级成 File 类型（PushFileNow 有 File.Exists 守卫会直接返回），
+            // 应作为「一个顶层目录」的 Group 打包。
+            if (valid.Count == 1 && File.Exists(valid[0])) { PushFileNow(valid[0]); return; }
 
             _dispatcher.InvokeAsync(() =>
             {
@@ -675,7 +786,17 @@ namespace WinKit.Clipboard.Services
             long total = 0;
             foreach (var f in files)
             {
-                try { total += new FileInfo(f).Length; }
+                try
+                {
+                    if (Directory.Exists(f))
+                    {
+                        // FileInfo(目录).Length 会抛 FileNotFoundException，导致整个推送静默失败；
+                        // 目录要按解压后的文件总长计入（服务端 Group.Size 也是这个口径）。
+                        foreach (var sub in Directory.EnumerateFiles(f, "*", SearchOption.AllDirectories))
+                            total += new FileInfo(sub).Length;
+                    }
+                    else total += new FileInfo(f).Length;
+                }
                 catch { return; }
             }
             var maxBytes = _settingsManager.Settings.SyncFileMaxMB * 1024L * 1024L;
@@ -700,6 +821,7 @@ namespace WinKit.Clipboard.Services
                 using var content = new StreamContent(fs);
                 using var resp = await _http.PutAsync(
                     BuildUrl($"file/{Uri.EscapeDataString(dataName)}"), content, ct).ConfigureAwait(false);
+                if (IsAuthFailure(resp.StatusCode)) { RegisterAuthFailure(); return; }
                 if (!resp.IsSuccessStatusCode) return;
             }
             catch { return; }
@@ -711,7 +833,8 @@ namespace WinKit.Clipboard.Services
             var profile = new SyncClipboardProfile
             {
                 Type = "Group",
-                Text = string.Join("\r\n", files.Select(Path.GetFileName)),
+                Text = string.Join("\r\n", files.Select(p =>
+                    Path.GetFileName(Path.TrimEndingDirectorySeparator(p)))),
                 HasData = true,
                 DataName = dataName,
                 TransferDataHash = transferHash,
@@ -751,14 +874,31 @@ namespace WinKit.Clipboard.Services
                     if (Directory.Exists(path))
                     {
                         var dirName = Path.GetFileName(Path.TrimEndingDirectorySeparator(path));
-                        zip.CreateEntry(dirName + "/", CompressionLevel.Optimal);
-                        entries.Add(new GroupEntryItem(dirName + "/", true, 0, ""));
+                        var rootEntryName = dirName + "/";
+                        zip.CreateEntry(rootEntryName, CompressionLevel.Optimal);
+                        entries.Add(new GroupEntryItem(rootEntryName, true, 0, ""));
+
+                        // 官方 GroupProfile.AddDirectoryToArchiveAsync：**每一级**子目录都写显式
+                        // 目录条目并计入清单 hash；服务端 parseGroupZip 也会逐级推导隐式父目录。
+                        // 早期版本只写顶层一条，含子目录时两端条目集不同 → hash 不等价 →
+                        // PUT /SyncClipboard.json 返回 400 "Hash is not match data."。
+                        foreach (var subDir in Directory.EnumerateDirectories(path, "*", SearchOption.AllDirectories))
+                        {
+                            ct.ThrowIfCancellationRequested();
+                            var rel = Path.GetRelativePath(path, subDir).Replace('\\', '/');
+                            var dirEntry = dirName + "/" + rel + "/";
+                            zip.CreateEntry(dirEntry, CompressionLevel.Optimal);
+                            entries.Add(new GroupEntryItem(dirEntry, true, 0, ""));
+                        }
+
                         foreach (var sub in Directory.EnumerateFiles(path, "*", SearchOption.AllDirectories))
                         {
+                            ct.ThrowIfCancellationRequested();
                             var entryName = dirName + "/" + Path.GetRelativePath(path, sub).Replace('\\', '/');
                             zip.CreateEntryFromFile(sub, entryName, CompressionLevel.Optimal);
+                            // 用可释放的流式哈希；旧写法 File.OpenRead 从不 Dispose，大文件夹会漏句柄
                             entries.Add(new GroupEntryItem(entryName, false, new FileInfo(sub).Length,
-                                Convert.ToHexString(await SHA256.HashDataAsync(File.OpenRead(sub), ct).ConfigureAwait(false))));
+                                await ComputeContentHashFromFileAsync(sub, ct).ConfigureAwait(false)));
                         }
                     }
                     else
@@ -857,7 +997,12 @@ namespace WinKit.Clipboard.Services
             try
             {
                 topEntries = zipTopEntries(bytes);
-                fileEntries = topEntries.Where(File.Exists).ToList();
+                // zipTopEntries 返回的是**条目名**，旧写法直接拿名字去 File.Exists，
+                // 判断的是进程工作目录，永远为 false → 拉下来的文件一个都不入历史。
+                fileEntries = topEntries
+                    .Select(name => Path.Combine(extractDir, name))
+                    .Where(File.Exists)
+                    .ToList();
             }
             catch { topEntries = fileEntries = new List<string>(); }
 
@@ -913,6 +1058,7 @@ namespace WinKit.Clipboard.Services
 
         private async Task<bool> PutProfileAsync(SyncClipboardProfile profile, CancellationToken ct)
         {
+            bool ok = false;
             try
             {
                 var body = new StringContent(
@@ -920,9 +1066,20 @@ namespace WinKit.Clipboard.Services
                     Encoding.UTF8,
                     "application/json");
                 using var resp = await _http.PutAsync(BuildUrl("SyncClipboard.json"), body, ct).ConfigureAwait(false);
-                return resp.IsSuccessStatusCode;
+                if (IsAuthFailure(resp.StatusCode)) RegisterAuthFailure();
+                ok = resp.IsSuccessStatusCode;
             }
-            catch { return false; }
+            catch { /* 网络异常，下轮重试 */ }
+
+            // 只在 PUT 失败时清理自己上传的暂存对象：服务端在 400（hash 不符）等分支
+            // 不会消费暂存（profileWrite.ts:187-200），R2 的 file/ 会留下孤儿。
+            // **成功时绝不 DELETE**：CF 服务端该路由只删暂存（webdav.ts:205-213），
+            // 但其它兼容服务端（官方 Server / WebDAV）的 /file/{name} 可能已指向持久文件，
+            // 成功后删会把刚推上去的数据一起删掉。宁可留孤儿，不可破坏数据。
+            if (!ok && profile.HasData && !string.IsNullOrEmpty(profile.DataName))
+                await DeleteStagedDataAsync(profile.DataName, ct).ConfigureAwait(false);
+
+            return ok;
         }
 
         private async Task<bool> UploadDataAsync(string dataName, byte[] bytes, CancellationToken ct)
@@ -932,10 +1089,28 @@ namespace WinKit.Clipboard.Services
                 using var content = new ByteArrayContent(bytes);
                 using var resp = await _http.PutAsync(
                     BuildUrl($"file/{Uri.EscapeDataString(dataName)}"), content, ct).ConfigureAwait(false);
+                if (IsAuthFailure(resp.StatusCode)) RegisterAuthFailure();
                 return resp.IsSuccessStatusCode;
             }
             catch { return false; }
         }
+
+        /// <summary>清理 /file 暂存对象（服务端 DELETE 路由只删暂存，不动历史文件）。</summary>
+        private async Task DeleteStagedDataAsync(string dataName, CancellationToken ct)
+        {
+            try
+            {
+                using var resp = await _http.DeleteAsync(
+                    BuildUrl($"file/{Uri.EscapeDataString(dataName)}"), ct).ConfigureAwait(false);
+            }
+            catch { /* 清理失败不影响同步主流程 */ }
+        }
+
+        private static bool IsAuthFailure(HttpStatusCode code) =>
+            code == HttpStatusCode.Unauthorized || code == HttpStatusCode.Forbidden;
+
+        private void RegisterAuthFailure() =>
+            _authBlockedUntil = DateTime.Now.AddMinutes(AuthBlockMinutes);
 
         private string BuildUrl(string path)
         {
@@ -1049,10 +1224,13 @@ namespace WinKit.Clipboard.Services
         [JsonPropertyName("dataName")]
         public string? DataName { get; set; }
 
+        // 对齐官方 ProfileDto：null 字段不出现在 wire 上（旧版会输出 "transferDataHash":null）
         [JsonPropertyName("transferDataHash")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public string? TransferDataHash { get; set; }
 
         [JsonPropertyName("size")]
+        [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
         public long? Size { get; set; }
     }
 }

@@ -54,7 +54,7 @@
 * **模型缺失自动回退**：所选 OCR 模型文件缺失时，自动回退到另一个可用模型并在状态区提示。
 
 ### 4. 🔄 剪贴板同步（兼容 SyncClipboard 官方协议）
-* **跨设备剪贴板互通**：文本 / 图片 / 文件三类内容与手机端官方 [SyncClipboard](https://github.com/Jeric-X/SyncClipboard) 客户端直接互通，协议逐字对齐官方实现（hash 算法、两步上传、`Image_时间戳.png` 命名）。
+* **跨设备剪贴板互通**：文本 / 图片 / 文件三类内容与手机端官方 [SyncClipboard](https://github.com/Jeric-X/SyncClipboard) 客户端直接互通，协议逐字对齐官方实现（hash 算法、两步上传、`Image_时间戳.png` 命名）。已对齐官方 **3.3.0**：超过 10240 字符的长文本走外置 `.txt`（`profile.text` 只留前缀），推送与拉取都按全文 hash 校验；右键多选**文件夹**会按官方 Group 语义逐级打包，含子目录也能通过服务端 hash 校验。
 * **配套服务器**：使用自部署的 [SyncClipboardCfServer](https://github.com/oishijie/SyncClipboardCfServer) —— SyncClipboard 官方同步服务器的 Cloudflare Workers 复刻（TypeScript + D1 + R2 + Durable Objects），免服务器、免流量费，免费额度内轻松支撑多设备轮询；也兼容官方协议的任意 WebDAV / 自建服务器。
 * **推送时机可控**：文本复制即推；图片 / 文件默认仅入本地历史，通过资源管理器右键「同步到手机（WinKit）」显式推送（无视开关与黑名单，仅大小上限拦截）。
 * **双向自动拉取**：远端新内容自动写进系统剪贴板与本地历史，推送 / 拉取成功均有托盘气泡提示，可分别开关。

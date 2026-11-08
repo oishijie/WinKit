@@ -37,6 +37,8 @@ $RECYCLE.BIN/
 ## ── 本地参考项目（第三方源码副本，非本仓库代码，许可不同） ──
 /ScreenCapture-main/
 /SnowAir-main/
+/SyncClipboard-master/
+/SyncClipboardCfServer-master/
 
 ## ── 本机工具与运行时残留 ──
 /.workbuddy/

@@ -343,7 +343,10 @@ namespace WinKit
                     if (i + 1 < args.Length) files.Add(args[++i]);
                 }
             }
-            return files.Where(f => !string.IsNullOrWhiteSpace(f) && File.Exists(f)).ToArray();
+            // 目录也要放行：右键选中的文件夹会打包成官方 Group 类型
+            return files
+                .Where(f => !string.IsNullOrWhiteSpace(f) && (File.Exists(f) || Directory.Exists(f)))
+                .ToArray();
         }
 
         /// <summary>取出并清空通道文件里的待推文件路径（多选时多个临时实例追加，主实例一次性合并）</summary>
@@ -358,7 +361,7 @@ namespace WinKit
                 File.Delete(path);
                 return lines
                     .Select(l => l.Trim())
-                    .Where(l => l.Length > 0 && File.Exists(l))
+                    .Where(l => l.Length > 0 && (File.Exists(l) || Directory.Exists(l)))
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .ToArray();
             }
@@ -368,14 +371,14 @@ namespace WinKit
             }
         }
 
-        /// <summary>处理右键推送：第一个文件显式推送，其余仅入历史（一期单文件推送）</summary>
+        /// <summary>处理右键推送：单文件走 File 类型，多选 / 目录打包成官方 Group 类型</summary>
         private void ProcessClipSendFiles(string[] files)
         {
             if (files.Length == 0 || _clipboardManager == null || _settingsManager == null) return;
 
             try
             {
-                if (files.Length == 1)
+                if (files.Length == 1 && File.Exists(files[0]))
                 {
                     ObtainPushEngine().PushFileNow(files[0]);
                 }
